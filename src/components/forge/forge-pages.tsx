@@ -1,7 +1,7 @@
 "use client";
 
 import { Suspense, useEffect, useMemo, useState } from "react";
-import { Bot, Play, RotateCcw } from "lucide-react";
+import { Bot, Play, Power, RotateCcw } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import type { Division, ForgeSnapshot, Operation, RuntimeEvent, RuntimeStatus, VirtualFile, Worker } from "@/lib/runtime/types";
 import { deriveForgeMetrics } from "@/lib/runtime/metrics";
@@ -580,7 +580,7 @@ export function LogsPage({ initialSnapshot }: { initialSnapshot: ForgeSnapshot }
   );
 }
 
-function ExecutiveConsole({ snapshot, pending, commandError, onCommand }: { snapshot: ForgeSnapshot; pending: boolean; commandError: string | null; onCommand: (command: { type: "run_full_flow" | "reset_demo_state" | "operator_message"; message?: string }) => Promise<void> }) {
+function ExecutiveConsole({ snapshot, pending, commandError, onCommand }: { snapshot: ForgeSnapshot; pending: boolean; commandError: string | null; onCommand: (command: { type: "run_full_flow" | "shutdown_forge" | "reset_demo_state" | "operator_message"; message?: string }) => Promise<void> }) {
   const [message, setMessage] = useState("");
   const recent = snapshot.messages.slice(-4);
 
@@ -604,8 +604,9 @@ function ExecutiveConsole({ snapshot, pending, commandError, onCommand }: { snap
           <input value={message} onChange={(event) => setMessage(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void submit(); }} placeholder="Ask Executive AI" className="min-w-0 flex-1 rounded border border-forge-line bg-black/30 px-3 py-2 text-sm outline-none focus:border-forge-cyan" />
           <button className="rounded bg-forge-cyan px-3 py-2 text-sm font-semibold text-black disabled:opacity-60" disabled={pending} onClick={() => void submit()}>Send</button>
         </div>
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-3 gap-2">
           <button className="flex items-center justify-center gap-2 rounded border border-forge-line px-3 py-2 text-sm hover:border-forge-cyan disabled:opacity-60" disabled={pending} onClick={() => void onCommand({ type: "run_full_flow" })}><Play className="h-4 w-4" />Run Flow</button>
+          <button className="flex items-center justify-center gap-2 rounded border border-amber-400/40 px-3 py-2 text-sm text-amber-100 hover:border-amber-200 disabled:opacity-60" disabled={pending || snapshot.forge.status === "archived"} onClick={() => void onCommand({ type: "shutdown_forge" })}><Power className="h-4 w-4" />Shutdown</button>
           <button className="flex items-center justify-center gap-2 rounded border border-forge-line px-3 py-2 text-sm hover:border-forge-cyan disabled:opacity-60" disabled={pending} onClick={() => void onCommand({ type: "reset_demo_state" })}><RotateCcw className="h-4 w-4" />Reset</button>
         </div>
         {commandError ? <div className="rounded border border-red-400/30 bg-red-500/10 p-3 text-sm text-red-100">{commandError}</div> : null}

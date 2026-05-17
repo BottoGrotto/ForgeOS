@@ -42,6 +42,29 @@ describe("POST /api/runtime/commands", () => {
     expect(payload.data?.forge.activePhase).toBe("Deployment Ready");
   });
 
+  it("returns a safe shutdown snapshot", async () => {
+    const request = new NextRequest("http://localhost/api/runtime/commands", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        host: "localhost",
+        origin: "http://localhost"
+      },
+      body: JSON.stringify({
+        type: "shutdown_forge",
+        idempotencyKey: "api-shutdown-forge"
+      })
+    });
+
+    const response = await POST(request);
+    const payload = (await response.json()) as { success: boolean; data?: { forge: { activePhase: string; status: string } } };
+
+    expect(response.status).toBe(200);
+    expect(payload.success).toBe(true);
+    expect(payload.data?.forge.status).toBe("archived");
+    expect(payload.data?.forge.activePhase).toBe("Safe Shutdown");
+  });
+
   it("returns a conflict response for strict runtime command rejection", async () => {
     const request = new NextRequest("http://localhost/api/runtime/commands", {
       method: "POST",

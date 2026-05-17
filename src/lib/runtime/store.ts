@@ -9,7 +9,7 @@ import { getBlockingDependencyIds } from "./scheduler";
 import type { AgentRuntime, ForgeSnapshot, RuntimeCommand, RuntimeEvent, RuntimeEventDraft } from "./types";
 
 const commandSchema = z.object({
-  type: z.enum(["initialize_forge", "start_phase", "run_operation", "run_full_flow", "reset_demo_state", "operator_message"]),
+  type: z.enum(["initialize_forge", "start_phase", "run_operation", "run_full_flow", "shutdown_forge", "reset_demo_state", "operator_message"]),
   forgeId: z.string().optional(),
   operationId: z.string().optional(),
   phase: z.string().max(80).optional(),
@@ -93,6 +93,8 @@ export class RuntimeStore {
         return this.runOperation(command.operationId);
       case "run_full_flow":
         return this.runFullFlow();
+      case "shutdown_forge":
+        return this.shutdownForge();
       case "operator_message":
         return this.addOperatorMessage(command.message ?? "");
     }
@@ -264,6 +266,72 @@ export class RuntimeStore {
     });
   }
 
+  private async shutdownForge() {
+    const snapshot = await this.loadSnapshot();
+    const activeOperationStatuses = new Set(["planning", "ready", "running", "blocked", "reviewing"]);
+    const canceledOperationIds = new Set(
+      snapshot.operations
+        .filter((operation) => activeOperationStatuses.has(operation.status))
+        .map((operation) => operation.id)
+    );
+    const affectedDivisionIds = new Set(
+      snapshot.operations
+        .filter((operation) => canceledOperationIds.has(operation.id))
+        .map((operation) => operation.divisionId)
+    );
+
+    return appendEvents(
+      {
+        ...snapshot,
+        forge: {
+          ...snapshot.forge,
+          status: "archived",
+          activePhase: "Safe Shutdown"
+        },
+        operations: snapshot.operations.map((operation) =>
+          canceledOperationIds.has(operation.id)
+            ? {
+                ...operation,
+                status: "canceled" as const,
+                blockedReason: undefined
+              }
+            : operation
+        ),
+        workers: snapshot.workers.map((worker) =>
+          worker.status === "completed"
+            ? worker
+            : {
+                ...worker,
+                status: "canceled" as const,
+                currentTask: undefined
+              }
+        ),
+        divisions: snapshot.divisions.map((division) =>
+          affectedDivisionIds.has(division.id) && division.status !== "completed"
+            ? {
+                ...division,
+                status: "canceled" as const
+              }
+            : division
+        )
+      },
+      [
+        {
+          forgeId: snapshot.forge.id,
+          type: "runtime.shutdown",
+          actorType: "operator",
+          targetType: "forge",
+          targetId: snapshot.forge.id,
+          message: "Safe shutdown completed. New operation runs are paused and incomplete work was canceled.",
+          severity: "warning",
+          payload: {
+            canceledOperationIds: Array.from(canceledOperationIds)
+          }
+        }
+      ]
+    );
+  }
+
   private async addOperatorMessage(content: string) {
     const snapshot = await this.loadSnapshot();
     const timestamp = new Date().toISOString();
@@ -306,6 +374,10 @@ export class RuntimeStore {
   }
 
   private assertOperationCanRun(snapshot: ForgeSnapshot, operationId: string) {
+    if (snapshot.forge.status !== "active") {
+      throw new RuntimeCommandError("Forge is safely shut down and is not accepting operation runs.", 409);
+    }
+
     const operation = snapshot.operations.find((candidate) => candidate.id === operationId);
     if (!operation) {
       throw new RuntimeCommandError("No operation selected.", 400);

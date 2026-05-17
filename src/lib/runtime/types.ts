@@ -37,6 +37,7 @@ export type RuntimeEventType =
   | "file.updated"
   | "handoff.created"
   | "chat.message_added"
+  | "runtime.shutdown"
   | "runtime.reset";
 
 export type RuntimeCommandType =
@@ -44,6 +45,7 @@ export type RuntimeCommandType =
   | "start_phase"
   | "run_operation"
   | "run_full_flow"
+  | "shutdown_forge"
   | "reset_demo_state"
   | "operator_message";
 

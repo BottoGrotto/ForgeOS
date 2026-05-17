@@ -63,6 +63,32 @@ describe("runtimeStore", () => {
     expect(snapshot.forge.activePhase).toBe("Deployment Ready");
   });
 
+  it("safely shuts down a forge and cancels incomplete work", async () => {
+    const runtimeStore = createTestStore();
+    await runtimeStore.dispatch({ type: "reset_demo_state", idempotencyKey: "test-reset-6" });
+
+    const snapshot = await runtimeStore.dispatch({ type: "shutdown_forge", idempotencyKey: "shutdown-forge" });
+
+    expect(snapshot.forge.status).toBe("archived");
+    expect(snapshot.forge.activePhase).toBe("Safe Shutdown");
+    expect(snapshot.operations.filter((operation) => operation.status !== "completed").every((operation) => operation.status === "canceled")).toBe(true);
+    expect(snapshot.workers.filter((worker) => worker.status !== "completed").every((worker) => worker.status === "canceled")).toBe(true);
+    expect(snapshot.events.at(-1)?.type).toBe("runtime.shutdown");
+  });
+
+  it("rejects new operation runs after safe shutdown", async () => {
+    const runtimeStore = createTestStore();
+    await runtimeStore.dispatch({ type: "reset_demo_state", idempotencyKey: "test-reset-7" });
+    await runtimeStore.dispatch({ type: "shutdown_forge", idempotencyKey: "shutdown-before-run" });
+
+    await expect(
+      runtimeStore.dispatch({ type: "run_operation", operationId: "op-runtime", idempotencyKey: "run-after-shutdown" })
+    ).rejects.toMatchObject({
+      status: 409,
+      message: "Forge is safely shut down and is not accepting operation runs."
+    });
+  });
+
   it("marks command errors for callers that need status codes", () => {
     const error = new RuntimeCommandError("No operation selected.", 400);
 
