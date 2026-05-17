@@ -42,7 +42,7 @@ describe("POST /api/runtime/commands", () => {
     expect(payload.data?.forge.activePhase).toBe("Deployment Ready");
   });
 
-  it("returns a safe shutdown snapshot", async () => {
+  it("returns a safe pause snapshot", async () => {
     const request = new NextRequest("http://localhost/api/runtime/commands", {
       method: "POST",
       headers: {
@@ -51,8 +51,8 @@ describe("POST /api/runtime/commands", () => {
         origin: "http://localhost"
       },
       body: JSON.stringify({
-        type: "shutdown_forge",
-        idempotencyKey: "api-shutdown-forge"
+        type: "pause_forge",
+        idempotencyKey: "api-pause-forge"
       })
     });
 
@@ -61,8 +61,46 @@ describe("POST /api/runtime/commands", () => {
 
     expect(response.status).toBe(200);
     expect(payload.success).toBe(true);
-    expect(payload.data?.forge.status).toBe("archived");
+    expect(payload.data?.forge.status).toBe("paused");
     expect(payload.data?.forge.activePhase).toBe("Safe Shutdown");
+  });
+
+  it("resumes a paused forge", async () => {
+    await POST(
+      new NextRequest("http://localhost/api/runtime/commands", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          host: "localhost",
+          origin: "http://localhost"
+        },
+        body: JSON.stringify({
+          type: "pause_forge",
+          idempotencyKey: "api-pause-before-resume"
+        })
+      })
+    );
+
+    const response = await POST(
+      new NextRequest("http://localhost/api/runtime/commands", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          host: "localhost",
+          origin: "http://localhost"
+        },
+        body: JSON.stringify({
+          type: "resume_forge",
+          idempotencyKey: "api-resume-forge"
+        })
+      })
+    );
+    const payload = (await response.json()) as { success: boolean; data?: { forge: { activePhase: string; status: string } } };
+
+    expect(response.status).toBe(200);
+    expect(payload.success).toBe(true);
+    expect(payload.data?.forge.status).toBe("active");
+    expect(payload.data?.forge.activePhase).toBe("Blocked Review");
   });
 
   it("returns a conflict response for strict runtime command rejection", async () => {

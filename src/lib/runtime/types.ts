@@ -5,6 +5,7 @@ export type RuntimeStatus =
   | "running"
   | "blocked"
   | "reviewing"
+  | "paused"
   | "completed"
   | "failed"
   | "canceled";
@@ -37,7 +38,8 @@ export type RuntimeEventType =
   | "file.updated"
   | "handoff.created"
   | "chat.message_added"
-  | "runtime.shutdown"
+  | "runtime.paused"
+  | "runtime.resumed"
   | "runtime.reset";
 
 export type RuntimeCommandType =
@@ -45,6 +47,8 @@ export type RuntimeCommandType =
   | "start_phase"
   | "run_operation"
   | "run_full_flow"
+  | "pause_forge"
+  | "resume_forge"
   | "shutdown_forge"
   | "reset_demo_state"
   | "operator_message";
@@ -180,7 +184,7 @@ export interface ForgeSnapshot {
     name: string;
     tagline: string;
     activePhase: string;
-    status: "active" | "archived";
+    status: "active" | "paused" | "archived";
   };
   lastEventSequence: number;
   schemaVersion: number;

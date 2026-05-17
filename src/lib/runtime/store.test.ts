@@ -63,30 +63,57 @@ describe("runtimeStore", () => {
     expect(snapshot.forge.activePhase).toBe("Deployment Ready");
   });
 
-  it("safely shuts down a forge and cancels incomplete work", async () => {
+  it("pauses a forge and marks incomplete work paused", async () => {
     const runtimeStore = createTestStore();
     await runtimeStore.dispatch({ type: "reset_demo_state", idempotencyKey: "test-reset-6" });
 
-    const snapshot = await runtimeStore.dispatch({ type: "shutdown_forge", idempotencyKey: "shutdown-forge" });
+    const snapshot = await runtimeStore.dispatch({ type: "pause_forge", idempotencyKey: "pause-forge" });
 
-    expect(snapshot.forge.status).toBe("archived");
+    expect(snapshot.forge.status).toBe("paused");
     expect(snapshot.forge.activePhase).toBe("Safe Shutdown");
-    expect(snapshot.operations.filter((operation) => operation.status !== "completed").every((operation) => operation.status === "canceled")).toBe(true);
-    expect(snapshot.workers.filter((worker) => worker.status !== "completed").every((worker) => worker.status === "canceled")).toBe(true);
-    expect(snapshot.events.at(-1)?.type).toBe("runtime.shutdown");
+    expect(snapshot.operations.filter((operation) => operation.status !== "completed").every((operation) => operation.status === "paused")).toBe(true);
+    expect(snapshot.workers.filter((worker) => worker.status !== "completed").every((worker) => worker.status === "paused")).toBe(true);
+    expect(snapshot.events.at(-1)?.type).toBe("runtime.paused");
   });
 
-  it("rejects new operation runs after safe shutdown", async () => {
+  it("keeps shutdown_forge as a safe pause alias", async () => {
     const runtimeStore = createTestStore();
     await runtimeStore.dispatch({ type: "reset_demo_state", idempotencyKey: "test-reset-7" });
-    await runtimeStore.dispatch({ type: "shutdown_forge", idempotencyKey: "shutdown-before-run" });
+
+    const snapshot = await runtimeStore.dispatch({ type: "shutdown_forge", idempotencyKey: "shutdown-forge" });
+
+    expect(snapshot.forge.status).toBe("paused");
+    expect(snapshot.events.at(-1)?.type).toBe("runtime.paused");
+  });
+
+  it("rejects new operation runs while paused", async () => {
+    const runtimeStore = createTestStore();
+    await runtimeStore.dispatch({ type: "reset_demo_state", idempotencyKey: "test-reset-8" });
+    await runtimeStore.dispatch({ type: "pause_forge", idempotencyKey: "pause-before-run" });
 
     await expect(
       runtimeStore.dispatch({ type: "run_operation", operationId: "op-runtime", idempotencyKey: "run-after-shutdown" })
     ).rejects.toMatchObject({
       status: 409,
-      message: "Forge is safely shut down and is not accepting operation runs."
+      message: "Forge is paused and is not accepting operation runs."
     });
+  });
+
+  it("resumes a paused forge and restores eligible work", async () => {
+    const runtimeStore = createTestStore();
+    await runtimeStore.dispatch({ type: "reset_demo_state", idempotencyKey: "test-reset-9" });
+    await runtimeStore.dispatch({ type: "pause_forge", idempotencyKey: "pause-before-resume" });
+
+    const snapshot = await runtimeStore.dispatch({ type: "resume_forge", idempotencyKey: "resume-forge" });
+
+    expect(snapshot.forge.status).toBe("active");
+    expect(snapshot.forge.activePhase).toBe("Blocked Review");
+    expect(snapshot.operations.find((operation) => operation.id === "op-runtime")?.status).toBe("ready");
+    expect(snapshot.operations.find((operation) => operation.id === "op-tests")?.status).toBe("blocked");
+    expect(snapshot.operations.find((operation) => operation.id === "op-qa")?.status).toBe("planning");
+    expect(snapshot.operations.find((operation) => operation.id === "op-release")?.status).toBe("planning");
+    expect(snapshot.operations.filter((operation) => operation.status === "blocked").map((operation) => operation.id)).toEqual(["op-tests"]);
+    expect(snapshot.events.at(-1)?.type).toBe("runtime.resumed");
   });
 
   it("marks command errors for callers that need status codes", () => {

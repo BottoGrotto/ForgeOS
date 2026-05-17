@@ -2,7 +2,9 @@
 
 ## Current State
 
-ForgeOS is a greenfield Next.js App Router application for an autonomous startup organization runtime. The UI is no longer a single overloaded dashboard; it is split into focused management pages:
+ForgeOS is a Next.js App Router application for deploying autonomous AI "forges" that coordinate agents, operations, artifacts, handoffs, workspace state, runtime events, and executive oversight for hackathon-style project builds.
+
+The UI is split into focused management pages:
 
 - `/forge/demo` - overview, health metrics, Executive Console, priority blockers, project completeness board
 - `/forge/demo/org` - full organization map with local division/worker details
@@ -11,33 +13,61 @@ ForgeOS is a greenfield Next.js App Router application for an autonomous startup
 - `/forge/demo/assets` - Forge asset/artifact browser
 - `/forge/demo/logs` - runtime event stream
 
-The app currently uses an in-memory `RuntimeStore` seeded from `src/lib/mock/seed.ts`. It exposes API routes for runtime commands, snapshots, events, Executive Console messages, and virtual files. Zustand preserves newer client state across page navigation so mock runtime changes survive route changes.
+The runtime is now command-driven and durable-ready:
 
-## What Was Recently Fixed
+- `RuntimeStore` is async and wraps persistence plus mock agent execution.
+- Prisma-backed persistence exists for Forge state, normalized runtime tables, snapshots, events, and idempotency keys.
+- In-memory persistence remains available for tests and local runs without `DATABASE_URL`.
+- Runtime snapshots are loaded from persistence when available instead of always reseeding.
+- Forge demo pages are dynamic so they read current runtime state per request.
+- Client state uses Zustand and now listens to SSE runtime events, then refetches snapshots.
 
-- Main dashboard was split into multiple pages so operators do not have to scroll to inspect selected entities.
-- Operation selections now deep-link from overview cards to `/forge/demo/operations?operation=<id>`.
-- Operations page reads `operation` query params and focuses the matching card/detail pane.
-- Operations page now supports:
-  - search
-  - group by status/division/worker/priority
-  - status filtering
-- Organization state projection was fixed. Running operations manually now updates:
-  - operation status/progress
-  - worker status
-  - division status/progress
-  - Forge phase
-- Priority blockers on the overview page now explain:
-  - why the operation is blocked
-  - owning division/worker
-  - downstream impact
-  - next action
+## Recently Completed
+
+- Added Prisma-backed durable runtime persistence:
+  - `PrismaRuntimePersistence`
+  - `PrismaEventStore`
+  - `PrismaSnapshotStore`
+  - normalized Forge runtime tables
+  - `ForgeSnapshot` JSON payloads
+  - `RuntimeCommandLedger` idempotency table
+- Added migrations:
+  - initial runtime core migration
+  - paused lifecycle enum migration
+- Split projection logic into `src/lib/runtime/projector.ts`.
+- Made `run_operation` strict:
+  - rejects blocked/non-ready operations
+  - rejects operation runs while paused/archived
+  - completes ready operations deterministically through `MockRuntime`
+  - unlocks eligible downstream operations
+- Added lifecycle commands:
+  - `pause_forge`
+  - `resume_forge`
+  - `shutdown_forge` as a backward-compatible safe-pause alias
+- Fixed pause/resume regression:
+  - pause records previous operation/worker/division states in the `runtime.paused` event payload
+  - resume restores those states instead of recomputing all paused operations as blocked
+  - after pause/resume, `op-qa` and `op-release` remain `planning`; only the original `op-tests` blocker remains blocked
+- Added UI lifecycle controls:
+  - Shutdown button while active
+  - Resume button while paused
+  - Reset remains available
+- Added SSE event stream:
+  - `GET /api/forge/current/events/stream`
+  - supports `afterSequence`
+  - sends missed events and heartbeat comments
+  - client uses SSE as an invalidation signal and refetches snapshots
+- Cleaned ESLint setup:
+  - `next lint` replaced with `eslint .`
+  - `eslint.config.mjs` added
+  - current lint output is clean
 
 ## Verification Status
 
 Latest passing checks:
 
 ```bash
+npm run lint
 npm test
 npm run build
 npm run e2e
@@ -45,122 +75,146 @@ npm run e2e
 
 Current test counts:
 
-- Unit/runtime: 9 tests passing
+- Unit/API/runtime: 21 tests passing
 - E2E: 1 Playwright smoke test passing
 
-Important workflow note: stop `npm run dev` before running `npm run build` or `npm run e2e`. Running Next dev and production build concurrently has repeatedly corrupted `.next` temporarily and caused missing chunk/manifest errors.
+Important workflow note: stop `npm run dev` before running `npm run build` or `npm run e2e`. Running Next dev and production build concurrently has previously caused temporary `.next` chunk/manifest errors.
 
-## Engine Transition: What Needs To Change Next
+## Next Development Priorities
 
-To move beyond dashboard simulation and start real engine work, the next session should focus on replacing the current in-memory mock runtime with a durable, command-driven runtime core.
+### 1. Commit And Push The Current Runtime Work
 
-### 1. Make RuntimeStore Durable
+Before starting the next feature, commit the current lifecycle/SSE/handoff updates.
 
-Current state lives only inside `src/lib/runtime/store.ts`. Replace or wrap it with a persistent store backed by Prisma:
+Recommended commands:
 
-- Append every mutation as `RuntimeEvent`.
-- Persist normalized Forge state in Prisma tables.
-- Persist `ForgeSnapshot` with `lastEventSequence`.
-- Load active Forge state from DB instead of `createDemoSnapshot()` on every process start.
-- Keep the same command API shape so the UI does not need to change.
+```bash
+git add -A
+git commit -m "feat: add forge lifecycle and event streaming"
+git push -u origin main --force-with-lease
+```
 
-Minimum target:
+If `--force-with-lease` rejects with stale info, run:
 
-- `RuntimeStore.dispatch(command)` writes events and projections to DB.
-- `RuntimeStore.getSnapshot()` reads the latest materialized snapshot.
-- `RuntimeStore.getEvents(afterSequence)` reads durable events.
+```bash
+git fetch origin main
+git push -u origin main --force-with-lease
+```
 
-### 2. Separate Command Handling From Projection
+### 2. Connect GitHub Repositories To Forges
 
-`RuntimeStore` currently does everything: validation, mutation, projection, event append, and mock behavior. Split it into:
+This is the next product capability requested by the user. A forge should be able to attach to a GitHub repository so agents can inspect project context and eventually produce branches/PRs.
 
-- `RuntimeCommandHandler` - validates and routes commands.
-- `RuntimeProjector` - derives workers/divisions/Forge phase from operations.
-- `EventStore` - appends ordered events and enforces idempotency.
-- `SnapshotStore` - reads/writes current materialized state.
-- `MockAgentRuntime` - emits operation execution events.
+Recommended v1 scope:
 
-The goal is to make the dashboard consume the same snapshot/events while the engine implementation becomes swappable.
+- Add a `ForgeRepository` or equivalent model/table.
+- Store repo metadata, not secrets:
+  - provider: `github`
+  - owner
+  - repo
+  - default branch
+  - selected working branch
+  - installation/account reference for future auth
+- Extend `ForgeSnapshot` so the UI can display connected repository state.
+- Add API commands:
+  - `connect_repository`
+  - `disconnect_repository`
+  - `refresh_repository_context`
+- Add a UI section in the overview or workspace page to connect/display repo status.
+- Keep real GitHub writes out of scope for v1; start read-only.
+- Use GitHub token/app auth via environment variables or GitHub App installation, never hardcoded secrets.
 
-### 3. Enforce The Operation Graph
+Success criteria:
 
-The current scheduler is light. Before real workers, implement real graph rules:
+- A forge can persistently remember its connected GitHub repo.
+- The UI shows connected repo metadata.
+- Runtime events record connect/disconnect/refresh actions.
+- Tests cover validation and persistence.
 
-- Blocking dependencies must complete before an operation can become `ready`.
-- `run_operation` should reject or block non-ready operations unless explicitly forced.
-- Workers should only run one operation at a time.
-- Failed operations should block downstream operations.
-- Completion should unlock dependent operations.
-- Add idempotency and command serialization around operation execution.
+Recommended implementation order:
 
-This is the first true Forge Runtime capability.
+1. Add types and Prisma schema/migration for connected repositories.
+2. Add seed data for a demo connected repo only if useful for UI development.
+3. Add command validation and runtime events for connect/disconnect/refresh.
+4. Add repository display/connect form in the UI.
+5. Add tests before implementation:
+   - command validation rejects malformed repo URLs/owners/names
+   - connect persists repo metadata into snapshots
+   - disconnect removes repo metadata
+   - refresh emits a runtime event without writing files
 
-### 4. Implement Runtime Event Streaming
+### 3. Harden Runtime Command Serialization
 
-The plan calls for mock-to-real compatibility through streaming events. Current APIs are request/response snapshots. Add a runtime event stream:
+The runtime has idempotency keys, but command execution is not yet protected by a proper per-forge lock.
 
-- Prefer SSE at `GET /api/forge/current/events/stream`.
-- Stream events by sequence.
-- Let the client apply events or refetch snapshot after event batches.
-- Keep polling fallback if SSE is unavailable.
+Add:
 
-This prepares for real Nemoclaw or other agent runtimes that produce intermediate progress/tool events.
+- per-forge command serialization
+- duplicate run protection per operation
+- worker concurrency enforcement around persisted state
+- tests for concurrent `run_operation` requests
 
-### 5. Define WorkspaceAdapter v1
+### 4. WorkspaceAdapter v1
 
-Files are virtual only right now, which is correct for safety. The next engine step is not writing to disk yet; it is formalizing the adapter:
+Virtual files are still the safe boundary. Formalize write operations before any real workspace sync.
+
+Target interface:
 
 - `listVirtualFiles(forgeId)`
 - `readVirtualFile(fileId)`
 - `writeVirtualFile(command/event)`
 - optional future `syncToWorkspace(forgeId)`
 
-All real workspace sync must stay behind `WorkspaceAdapter`; do not let workers directly read/write arbitrary paths.
+All real filesystem or GitHub repo writes must stay behind a workspace/repository adapter. Agents should not directly read/write arbitrary paths.
 
-### 6. Prepare Real Agent Adapter Contracts
+### 5. Real Agent Adapter Contracts
 
-The placeholder Nemoclaw adapter exists but is not wired into command execution. Next session should define the runtime boundary more concretely:
+`MockRuntime` is wired through the `AgentRuntime` interface. The placeholder Nemoclaw adapter still needs a concrete boundary before real execution.
 
-- `ProviderCapabilities`
+Define:
+
 - `RunHandle`
-- `runOperation(input): AsyncIterable<RuntimeEventDraft>`
-- `cancelOperation(operationId)`
-- external refs: `externalAgentId`, `externalRunId`, `provider`, `providerMetadata`
+- `externalAgentId`
+- `externalRunId`
+- provider metadata
+- streamed progress/tool events
+- cancellation behavior
+- retry/resume behavior
 
-Do not leak Nemoclaw-specific assumptions into the UI or core schema beyond nullable external refs.
+Avoid leaking Nemoclaw-specific assumptions into UI or core schema.
 
-## Recommended Next Implementation Slice
+### 6. Improve Runtime Event Streaming
 
-Build the engine in this order:
+The SSE endpoint exists and the client refetches snapshots after streamed events. Next improvements:
 
-1. Add Prisma-backed `EventStore`, `SnapshotStore`, and seed/load path.
-2. Move projection logic out of `RuntimeStore` into `RuntimeProjector`.
-3. Make `run_operation` dependency-aware and add tests for blocked/ready/unlocked transitions.
-4. Add SSE event stream or polling event reconciliation.
-5. Wire `MockAgentRuntime` through the same `AgentRuntime` interface intended for real providers.
-
-Success criteria for the next slice:
-
-- Restarting the dev server does not reset Forge state unless `reset_demo_state` is called.
-- Running an operation emits durable ordered events.
-- Completing an operation unlocks eligible dependents.
-- The UI remains unchanged except for consuming durable snapshots/events.
-- `npm test`, `npm run build`, and `npm run e2e` pass.
+- reconnect/backoff behavior
+- last-event-id support
+- browser-visible connection state
+- integration tests for reconnect/missed events
+- optional polling fallback if SSE fails
 
 ## Known Caveats
 
-- There is no git repository initialized in this workspace.
-- `npm audit` reports moderate transitive vulnerabilities in dev/build tooling; suggested fixes require breaking upgrades, so they were not forced.
-- `.next`, `.playwright-mcp`, screenshots, and console logs are ignored, but some local generated artifacts may still exist from verification runs.
-- The current Prisma schema is Postgres-ready, but the app is not actually using Prisma for runtime state yet.
-- The current Executive Console uses mock responses only.
+- Prisma is Postgres-oriented. Without `DATABASE_URL`, the app falls back to in-memory persistence.
+- `npm audit` previously reported moderate transitive vulnerabilities in dev/build tooling; fixes may require breaking upgrades.
+- The Executive Console still uses mock responses only.
+- Real GitHub repo connection is not implemented yet.
+- Real agent execution is not implemented yet.
+- Safe pause/resume restores prior statuses from the latest `runtime.paused` event payload; if old persisted paused snapshots lack that payload, resume falls back to dependency readiness.
+- `.next`, `.playwright-mcp`, screenshots, and console logs are ignored, but local generated artifacts can still exist from verification runs.
 
 ## Useful Files
 
-- `src/lib/runtime/store.ts` - current in-memory runtime store and projection logic
+- `src/lib/runtime/store.ts` - async command runtime facade
+- `src/lib/runtime/prisma.ts` - Prisma-backed runtime persistence
+- `src/lib/runtime/persistence.ts` - persistence interface and in-memory adapter
+- `src/lib/runtime/projector.ts` - organizational state projection
 - `src/lib/runtime/types.ts` - runtime contracts and snapshot types
-- `src/lib/runtime/scheduler.ts` - current dependency readiness helpers
+- `src/lib/runtime/scheduler.ts` - dependency readiness helpers
+- `src/lib/runtime/mock-runtime.ts` - deterministic mock agent runtime
 - `src/lib/mock/seed.ts` - seeded Forge data
-- `src/components/forge/forge-pages.tsx` - page-level UI and operations board logic
-- `prisma/schema.prisma` - intended durable data model
+- `src/lib/store/forge-store.ts` - Zustand state plus SSE snapshot refresh
+- `src/app/api/forge/current/events/stream/route.ts` - SSE event stream
+- `src/components/forge/forge-pages.tsx` - page-level UI and lifecycle controls
+- `prisma/schema.prisma` - durable runtime schema
 - `tests/e2e/forgeos.spec.ts` - current smoke flow

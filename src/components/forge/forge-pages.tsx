@@ -10,11 +10,11 @@ import { severityClass } from "./status";
 import { EmptyState, ForgeShell, MetricsGrid, Panel, Progress, StatusBadge } from "./forge-ui";
 
 export function OverviewPage({ initialSnapshot }: { initialSnapshot: ForgeSnapshot }) {
-  const { snapshot, hydrate, runCommand, commandPending, commandError } = useForgeStore();
+  const { snapshot, hydrate, connectEventStream, runCommand, commandPending, commandError } = useForgeStore();
   useEffect(() => hydrate(initialSnapshot), [hydrate, initialSnapshot]);
-  const current = snapshot ?? initialSnapshot;
+  useEffect(() => connectEventStream(), [connectEventStream]);
+  const current: ForgeSnapshot = snapshot ?? initialSnapshot;
   const metrics = deriveForgeMetrics(current);
-  const active = current.operations.filter((operation) => ["running", "ready", "blocked", "reviewing"].includes(operation.status));
   const blockers = current.operations.filter((operation) => ["blocked", "failed"].includes(operation.status));
 
   return (
@@ -182,9 +182,10 @@ function CompletenessCard({ operation, snapshot }: { operation: Operation; snaps
 }
 
 export function OrganizationPage({ initialSnapshot }: { initialSnapshot: ForgeSnapshot }) {
-  const { snapshot, hydrate } = useForgeStore();
+  const { snapshot, hydrate, connectEventStream } = useForgeStore();
   useEffect(() => hydrate(initialSnapshot), [hydrate, initialSnapshot]);
-  const current = snapshot ?? initialSnapshot;
+  useEffect(() => connectEventStream(), [connectEventStream]);
+  const current: ForgeSnapshot = snapshot ?? initialSnapshot;
   const [selected, setSelected] = useState<{ type: "division" | "worker"; id: string }>({ type: "division", id: current.divisions[0]?.id ?? "" });
   const detail = getOrgDetail(current, selected);
 
@@ -260,9 +261,10 @@ function OperationsPageFallback({ initialSnapshot }: { initialSnapshot: ForgeSna
 }
 
 function OperationsPageContent({ initialSnapshot }: { initialSnapshot: ForgeSnapshot }) {
-  const { snapshot, hydrate, runCommand, commandPending, commandError } = useForgeStore();
+  const { snapshot, hydrate, connectEventStream, runCommand, commandPending, commandError } = useForgeStore();
   useEffect(() => hydrate(initialSnapshot), [hydrate, initialSnapshot]);
-  const current = snapshot ?? initialSnapshot;
+  useEffect(() => connectEventStream(), [connectEventStream]);
+  const current: ForgeSnapshot = snapshot ?? initialSnapshot;
   const searchParams = useSearchParams();
   const operationParam = searchParams.get("operation");
   const initialSelectedId = current.operations.some((operation) => operation.id === operationParam)
@@ -479,9 +481,10 @@ function getOperationGroupLabel(snapshot: ForgeSnapshot, operation: Operation, g
 }
 
 export function WorkspacePage({ initialSnapshot }: { initialSnapshot: ForgeSnapshot }) {
-  const { snapshot, hydrate } = useForgeStore();
+  const { snapshot, hydrate, connectEventStream } = useForgeStore();
   useEffect(() => hydrate(initialSnapshot), [hydrate, initialSnapshot]);
-  const current = snapshot ?? initialSnapshot;
+  useEffect(() => connectEventStream(), [connectEventStream]);
+  const current: ForgeSnapshot = snapshot ?? initialSnapshot;
   const [selectedId, setSelectedId] = useState(current.files[0]?.id ?? "");
   const selected = current.files.find((file) => file.id === selectedId) ?? current.files[0];
 
@@ -515,9 +518,10 @@ export function WorkspacePage({ initialSnapshot }: { initialSnapshot: ForgeSnaps
 }
 
 export function AssetsPage({ initialSnapshot }: { initialSnapshot: ForgeSnapshot }) {
-  const { snapshot, hydrate } = useForgeStore();
+  const { snapshot, hydrate, connectEventStream } = useForgeStore();
   useEffect(() => hydrate(initialSnapshot), [hydrate, initialSnapshot]);
-  const current = snapshot ?? initialSnapshot;
+  useEffect(() => connectEventStream(), [connectEventStream]);
+  const current: ForgeSnapshot = snapshot ?? initialSnapshot;
   const [selectedId, setSelectedId] = useState(current.artifacts[0]?.id ?? "");
   const selected = current.artifacts.find((artifact) => artifact.id === selectedId) ?? current.artifacts[0];
 
@@ -549,9 +553,10 @@ export function AssetsPage({ initialSnapshot }: { initialSnapshot: ForgeSnapshot
 }
 
 export function LogsPage({ initialSnapshot }: { initialSnapshot: ForgeSnapshot }) {
-  const { snapshot, hydrate } = useForgeStore();
+  const { snapshot, hydrate, connectEventStream } = useForgeStore();
   useEffect(() => hydrate(initialSnapshot), [hydrate, initialSnapshot]);
-  const current = snapshot ?? initialSnapshot;
+  useEffect(() => connectEventStream(), [connectEventStream]);
+  const current: ForgeSnapshot = snapshot ?? initialSnapshot;
   const [selectedId, setSelectedId] = useState(current.events.at(-1)?.id ?? "");
   const selected = current.events.find((event) => event.id === selectedId) ?? current.events.at(-1);
 
@@ -580,7 +585,7 @@ export function LogsPage({ initialSnapshot }: { initialSnapshot: ForgeSnapshot }
   );
 }
 
-function ExecutiveConsole({ snapshot, pending, commandError, onCommand }: { snapshot: ForgeSnapshot; pending: boolean; commandError: string | null; onCommand: (command: { type: "run_full_flow" | "shutdown_forge" | "reset_demo_state" | "operator_message"; message?: string }) => Promise<void> }) {
+function ExecutiveConsole({ snapshot, pending, commandError, onCommand }: { snapshot: ForgeSnapshot; pending: boolean; commandError: string | null; onCommand: (command: { type: "run_full_flow" | "pause_forge" | "resume_forge" | "reset_demo_state" | "operator_message"; message?: string }) => Promise<void> }) {
   const [message, setMessage] = useState("");
   const recent = snapshot.messages.slice(-4);
 
@@ -606,7 +611,11 @@ function ExecutiveConsole({ snapshot, pending, commandError, onCommand }: { snap
         </div>
         <div className="grid grid-cols-3 gap-2">
           <button className="flex items-center justify-center gap-2 rounded border border-forge-line px-3 py-2 text-sm hover:border-forge-cyan disabled:opacity-60" disabled={pending} onClick={() => void onCommand({ type: "run_full_flow" })}><Play className="h-4 w-4" />Run Flow</button>
-          <button className="flex items-center justify-center gap-2 rounded border border-amber-400/40 px-3 py-2 text-sm text-amber-100 hover:border-amber-200 disabled:opacity-60" disabled={pending || snapshot.forge.status === "archived"} onClick={() => void onCommand({ type: "shutdown_forge" })}><Power className="h-4 w-4" />Shutdown</button>
+          {snapshot.forge.status === "paused" ? (
+            <button className="flex items-center justify-center gap-2 rounded border border-emerald-400/40 px-3 py-2 text-sm text-emerald-100 hover:border-emerald-200 disabled:opacity-60" disabled={pending} onClick={() => void onCommand({ type: "resume_forge" })}><Power className="h-4 w-4" />Resume</button>
+          ) : (
+            <button className="flex items-center justify-center gap-2 rounded border border-amber-400/40 px-3 py-2 text-sm text-amber-100 hover:border-amber-200 disabled:opacity-60" disabled={pending || snapshot.forge.status === "archived"} onClick={() => void onCommand({ type: "pause_forge" })}><Power className="h-4 w-4" />Shutdown</button>
+          )}
           <button className="flex items-center justify-center gap-2 rounded border border-forge-line px-3 py-2 text-sm hover:border-forge-cyan disabled:opacity-60" disabled={pending} onClick={() => void onCommand({ type: "reset_demo_state" })}><RotateCcw className="h-4 w-4" />Reset</button>
         </div>
         {commandError ? <div className="rounded border border-red-400/30 bg-red-500/10 p-3 text-sm text-red-100">{commandError}</div> : null}

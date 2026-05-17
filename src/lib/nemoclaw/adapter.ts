@@ -34,15 +34,15 @@ export class PlaceholderNemoclawAdapter implements NemoclawAdapter {
     };
   }
 
-  async createAgent(_config: AgentConfig): Promise<AgentInstance> {
+  async createAgent(): Promise<AgentInstance> {
     throw new Error("Nemoclaw integration is not configured");
   }
 
-  async *runAgent(_agentId: string, _input: AgentInput): AsyncIterable<RuntimeEventDraft> {
+  async *runAgent(): AsyncIterable<RuntimeEventDraft> {
     throw new Error("Nemoclaw integration is not configured");
   }
 
-  async terminateAgent(_agentId: string): Promise<void> {
+  async terminateAgent(): Promise<void> {
     throw new Error("Nemoclaw integration is not configured");
   }
 }

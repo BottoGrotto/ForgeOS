@@ -125,6 +125,10 @@ function deriveAggregateStatus(statuses: RuntimeStatus[]): RuntimeStatus {
     return "reviewing";
   }
 
+  if (statuses.some((status) => status === "paused")) {
+    return "paused";
+  }
+
   if (statuses.some((status) => status === "ready")) {
     return "ready";
   }

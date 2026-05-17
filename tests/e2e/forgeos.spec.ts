@@ -11,12 +11,22 @@ test("operator can run the ForgeOS demo flow", async ({ page }) => {
   await expect(page.getByText("Complete").first()).toBeVisible();
   await expect(page.getByText("In Progress").first()).toBeVisible();
   await expect(page.getByText("Not Started").first()).toBeVisible();
+  await page.getByRole("button", { name: /Shutdown/ }).click();
+  await expect(page.getByText("Safe Shutdown").first()).toBeVisible();
+  await page.getByRole("button", { name: /Resume/ }).click();
+  await expect(page.getByRole("button", { name: /Shutdown/ })).toBeVisible();
+  await page.getByRole("button", { name: /Reset/ }).click();
+  await expect(page.getByText("Autonomous Development").first()).toBeVisible();
+
   await page.getByRole("link", { name: /Verify runtime and UI/ }).first().click();
   await expect(page).toHaveURL(/operation=op-tests/);
   await expect(page.getByRole("heading", { name: "Operations Board" })).toBeVisible();
   await expect(page.getByText("Cover event ordering, dependency readiness, APIs, and golden flow.").first()).toBeVisible();
   await page.getByRole("link", { name: /Overview/ }).click();
-  await page.getByRole("button", { name: /Run Flow/ }).click();
+  await Promise.all([
+    page.waitForResponse((response) => response.url().includes("/api/runtime/commands") && response.status() === 200),
+    page.getByRole("button", { name: /Run Flow/ }).click()
+  ]);
   await expect(page.getByText("Deployment Ready").first()).toBeVisible();
 
   await page.getByRole("link", { name: /Organization/ }).click();

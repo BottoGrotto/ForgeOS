@@ -5,7 +5,6 @@ import {
   Activity,
   Bot,
   Boxes,
-  CheckCircle2,
   ChevronRight,
   CircleAlert,
   FileText,
@@ -26,13 +25,14 @@ import { Selection, useForgeStore } from "@/lib/store/forge-store";
 import { severityClass, statusClass } from "./status";
 
 export function ForgeCommandCenter({ initialSnapshot }: { initialSnapshot: ForgeSnapshot }) {
-  const { snapshot, hydrate, selected, selectNode, runCommand, commandPending, activePanel, setPanel } = useForgeStore();
+  const { snapshot, hydrate, connectEventStream, selected, selectNode, runCommand, commandPending, activePanel, setPanel } = useForgeStore();
 
   useEffect(() => {
     hydrate(initialSnapshot);
   }, [hydrate, initialSnapshot]);
+  useEffect(() => connectEventStream(), [connectEventStream]);
 
-  const current = snapshot ?? initialSnapshot;
+  const current: ForgeSnapshot = snapshot ?? initialSnapshot;
   const metrics = useMemo(() => deriveForgeMetrics(current), [current]);
 
   return (
@@ -276,7 +276,7 @@ function ExecutiveConsole({
 }: {
   snapshot: ForgeSnapshot;
   pending: boolean;
-  onCommand: (command: { type: "run_full_flow" | "reset_demo_state" | "run_operation" | "operator_message"; message?: string }) => Promise<void>;
+  onCommand: (command: { type: "run_full_flow" | "pause_forge" | "resume_forge" | "reset_demo_state" | "run_operation" | "operator_message"; message?: string }) => Promise<void>;
 }) {
   const [message, setMessage] = useState("");
   const recent = snapshot.messages.slice(-5);
@@ -320,7 +320,11 @@ function ExecutiveConsole({
         </div>
         <div className="mt-3 grid grid-cols-3 gap-2">
           <IconButton label="Run Flow" icon={Play} disabled={pending} onClick={() => void onCommand({ type: "run_full_flow" })} />
-          <IconButton label="Run Op" icon={Activity} disabled={pending} onClick={() => void onCommand({ type: "run_operation" })} />
+          {snapshot.forge.status === "paused" ? (
+            <IconButton label="Resume" icon={Activity} disabled={pending} onClick={() => void onCommand({ type: "resume_forge" })} />
+          ) : (
+            <IconButton label="Shutdown" icon={Activity} disabled={pending || snapshot.forge.status === "archived"} onClick={() => void onCommand({ type: "pause_forge" })} />
+          )}
           <IconButton label="Reset" icon={RotateCcw} disabled={pending} onClick={() => void onCommand({ type: "reset_demo_state" })} />
         </div>
       </div>

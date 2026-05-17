@@ -9,6 +9,7 @@ datasource db {
 
 enum ForgeStatus {
   active
+  paused
   archived
 }
 
@@ -19,6 +20,7 @@ enum RuntimeStatus {
   running
   blocked
   reviewing
+  paused
   completed
   failed
   canceled

@@ -35,7 +35,7 @@ export class MockRuntime implements AgentRuntime {
     };
   }
 
-  async cancelOperation(_operationId: string) {
+  async cancelOperation() {
     return Promise.resolve();
   }
 }

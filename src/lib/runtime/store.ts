@@ -6,10 +6,10 @@ import { InMemoryRuntimePersistence, type RuntimePersistence } from "./persisten
 import { PrismaRuntimePersistence } from "./prisma";
 import { projectOrganizationalState, unlockReadyOperations } from "./projector";
 import { getBlockingDependencyIds } from "./scheduler";
-import type { AgentRuntime, ForgeSnapshot, RuntimeCommand, RuntimeEvent, RuntimeEventDraft } from "./types";
+import type { AgentRuntime, ForgeSnapshot, RuntimeCommand, RuntimeEvent, RuntimeEventDraft, RuntimeStatus } from "./types";
 
 const commandSchema = z.object({
-  type: z.enum(["initialize_forge", "start_phase", "run_operation", "run_full_flow", "shutdown_forge", "reset_demo_state", "operator_message"]),
+  type: z.enum(["initialize_forge", "start_phase", "run_operation", "run_full_flow", "pause_forge", "resume_forge", "shutdown_forge", "reset_demo_state", "operator_message"]),
   forgeId: z.string().optional(),
   operationId: z.string().optional(),
   phase: z.string().max(80).optional(),
@@ -93,8 +93,11 @@ export class RuntimeStore {
         return this.runOperation(command.operationId);
       case "run_full_flow":
         return this.runFullFlow();
+      case "pause_forge":
       case "shutdown_forge":
-        return this.shutdownForge();
+        return this.pauseForge();
+      case "resume_forge":
+        return this.resumeForge();
       case "operator_message":
         return this.addOperatorMessage(command.message ?? "");
     }
@@ -266,33 +269,53 @@ export class RuntimeStore {
     });
   }
 
-  private async shutdownForge() {
+  private async pauseForge() {
     const snapshot = await this.loadSnapshot();
     const activeOperationStatuses = new Set(["planning", "ready", "running", "blocked", "reviewing"]);
-    const canceledOperationIds = new Set(
+    const pausedOperationIds = new Set(
       snapshot.operations
         .filter((operation) => activeOperationStatuses.has(operation.status))
         .map((operation) => operation.id)
     );
     const affectedDivisionIds = new Set(
       snapshot.operations
-        .filter((operation) => canceledOperationIds.has(operation.id))
+        .filter((operation) => pausedOperationIds.has(operation.id))
         .map((operation) => operation.divisionId)
     );
+    const pausedOperations = snapshot.operations
+      .filter((operation) => pausedOperationIds.has(operation.id))
+      .map((operation) => ({
+        id: operation.id,
+        status: operation.status,
+        blockedReason: operation.blockedReason
+      }));
+    const pausedWorkers = snapshot.workers
+      .filter((worker) => worker.status !== "completed")
+      .map((worker) => ({
+        id: worker.id,
+        status: worker.status,
+        currentTask: worker.currentTask
+      }));
+    const pausedDivisions = snapshot.divisions
+      .filter((division) => affectedDivisionIds.has(division.id) && division.status !== "completed")
+      .map((division) => ({
+        id: division.id,
+        status: division.status
+      }));
 
     return appendEvents(
       {
         ...snapshot,
         forge: {
           ...snapshot.forge,
-          status: "archived",
+          status: "paused",
           activePhase: "Safe Shutdown"
         },
         operations: snapshot.operations.map((operation) =>
-          canceledOperationIds.has(operation.id)
+          pausedOperationIds.has(operation.id)
             ? {
                 ...operation,
-                status: "canceled" as const,
+                status: "paused" as const,
                 blockedReason: undefined
               }
             : operation
@@ -302,7 +325,7 @@ export class RuntimeStore {
             ? worker
             : {
                 ...worker,
-                status: "canceled" as const,
+                status: "paused" as const,
                 currentTask: undefined
               }
         ),
@@ -310,7 +333,7 @@ export class RuntimeStore {
           affectedDivisionIds.has(division.id) && division.status !== "completed"
             ? {
                 ...division,
-                status: "canceled" as const
+                status: "paused" as const
               }
             : division
         )
@@ -318,18 +341,79 @@ export class RuntimeStore {
       [
         {
           forgeId: snapshot.forge.id,
-          type: "runtime.shutdown",
+          type: "runtime.paused",
           actorType: "operator",
           targetType: "forge",
           targetId: snapshot.forge.id,
-          message: "Safe shutdown completed. New operation runs are paused and incomplete work was canceled.",
+          message: "Safe shutdown completed. New operation runs are paused and incomplete work can be resumed.",
           severity: "warning",
           payload: {
-            canceledOperationIds: Array.from(canceledOperationIds)
+            pausedOperationIds: Array.from(pausedOperationIds),
+            pausedOperations,
+            pausedWorkers,
+            pausedDivisions
           }
         }
       ]
     );
+  }
+
+  private async resumeForge() {
+    const snapshot = await this.loadSnapshot();
+    if (snapshot.forge.status === "active") {
+      return snapshot;
+    }
+
+    if (snapshot.forge.status !== "paused") {
+      throw new RuntimeCommandError("Only paused forges can be resumed.", 409);
+    }
+
+    const pauseState = getLatestPauseState(snapshot);
+    const operations = snapshot.operations.map((operation) => {
+      if (operation.status !== "paused") {
+        return operation;
+      }
+
+      const previous = pauseState.operations.get(operation.id);
+      if (previous) {
+        return { ...operation, status: previous.status, blockedReason: previous.blockedReason };
+      }
+
+      const readiness = calculateOperationReadiness(operation, snapshot.operations, getBlockingDependencyIds(snapshot, operation.id));
+      if (readiness.ready) {
+        return { ...operation, status: "ready" as const, blockedReason: undefined };
+      }
+
+      return { ...operation, status: "blocked" as const, blockedReason: readiness.reason ?? "Waiting for dependencies" };
+    });
+
+    const resumed = projectOrganizationalState({
+      ...snapshot,
+      forge: {
+        ...snapshot.forge,
+        status: "active"
+      },
+      operations,
+      workers: snapshot.workers.map((worker) =>
+        worker.status === "paused" ? { ...worker, ...(pauseState.workers.get(worker.id) ?? { status: "idle" as const }) } : worker
+      ),
+      divisions: snapshot.divisions.map((division) =>
+        division.status === "paused" ? { ...division, ...(pauseState.divisions.get(division.id) ?? { status: "idle" as const }) } : division
+      )
+    });
+
+    return appendEvents(resumed, [
+      {
+        forgeId: snapshot.forge.id,
+        type: "runtime.resumed",
+        actorType: "operator",
+        targetType: "forge",
+        targetId: snapshot.forge.id,
+        message: "Forge resumed. Eligible paused operations are ready for execution.",
+        severity: "success",
+        payload: { resumedOperationIds: operations.filter((operation) => operation.status === "ready").map((operation) => operation.id) }
+      }
+    ]);
   }
 
   private async addOperatorMessage(content: string) {
@@ -374,8 +458,12 @@ export class RuntimeStore {
   }
 
   private assertOperationCanRun(snapshot: ForgeSnapshot, operationId: string) {
-    if (snapshot.forge.status !== "active") {
-      throw new RuntimeCommandError("Forge is safely shut down and is not accepting operation runs.", 409);
+    if (snapshot.forge.status === "paused") {
+      throw new RuntimeCommandError("Forge is paused and is not accepting operation runs.", 409);
+    }
+
+    if (snapshot.forge.status === "archived") {
+      throw new RuntimeCommandError("Forge is archived and is not accepting operation runs.", 409);
     }
 
     const operation = snapshot.operations.find((candidate) => candidate.id === operationId);
@@ -417,6 +505,75 @@ function appendEvents(snapshot: ForgeSnapshot, drafts: RuntimeEventDraft[]): For
     events: [...snapshot.events, ...events],
     lastEventSequence: snapshot.lastEventSequence + events.length
   };
+}
+
+function getLatestPauseState(snapshot: ForgeSnapshot) {
+  const pauseEvent = snapshot.events
+    .slice()
+    .reverse()
+    .find((event) => event.type === "runtime.paused");
+  const payload = pauseEvent?.payload ?? {};
+  const pausedOperations = Array.isArray(payload.pausedOperations) ? payload.pausedOperations : [];
+  const pausedWorkers = Array.isArray(payload.pausedWorkers) ? payload.pausedWorkers : [];
+  const pausedDivisions = Array.isArray(payload.pausedDivisions) ? payload.pausedDivisions : [];
+  const operations = new Map<string, { status: RuntimeStatus; blockedReason?: string }>();
+  const workers = new Map<string, { status: RuntimeStatus; currentTask?: string }>();
+  const divisions = new Map<string, { status: RuntimeStatus }>();
+
+  for (const operation of pausedOperations) {
+    if (isPreviousOperationState(operation)) {
+      operations.set(operation.id, { status: operation.status, blockedReason: operation.blockedReason });
+    }
+  }
+
+  for (const worker of pausedWorkers) {
+    if (isPreviousWorkerState(worker)) {
+      workers.set(worker.id, { status: worker.status, currentTask: worker.currentTask });
+    }
+  }
+
+  for (const division of pausedDivisions) {
+    if (isPreviousDivisionState(division)) {
+      divisions.set(division.id, { status: division.status });
+    }
+  }
+
+  return {
+    operations,
+    workers,
+    divisions
+  };
+}
+
+function isRuntimeStatus(value: unknown): value is RuntimeStatus {
+  return typeof value === "string" && ["idle", "planning", "ready", "running", "blocked", "reviewing", "paused", "completed", "failed", "canceled"].includes(value);
+}
+
+function isPreviousOperationState(value: unknown): value is { id: string; status: RuntimeStatus; blockedReason?: string } {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as { id?: unknown; status?: unknown; blockedReason?: unknown };
+  return typeof candidate.id === "string" && isRuntimeStatus(candidate.status) && (candidate.blockedReason === undefined || typeof candidate.blockedReason === "string");
+}
+
+function isPreviousWorkerState(value: unknown): value is { id: string; status: RuntimeStatus; currentTask?: string } {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as { id?: unknown; status?: unknown; currentTask?: unknown };
+  return typeof candidate.id === "string" && isRuntimeStatus(candidate.status) && (candidate.currentTask === undefined || typeof candidate.currentTask === "string");
+}
+
+function isPreviousDivisionState(value: unknown): value is { id: string; status: RuntimeStatus } {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as { id?: unknown; status?: unknown };
+  return typeof candidate.id === "string" && isRuntimeStatus(candidate.status);
 }
 
 function createDefaultPersistence(): RuntimePersistence {
