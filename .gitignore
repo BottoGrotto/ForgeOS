@@ -1,0 +1,12 @@
+node_modules
+.next
+coverage
+playwright-report
+test-results
+.playwright-mcp
+*.png
+console-errors*.md
+.env
+.env.local
+*.db
+*.db-journal

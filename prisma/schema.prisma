@@ -1,0 +1,289 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ForgeStatus {
+  active
+  archived
+}
+
+enum RuntimeStatus {
+  idle
+  planning
+  ready
+  running
+  blocked
+  reviewing
+  completed
+  failed
+  canceled
+}
+
+enum OperationPriority {
+  low
+  normal
+  high
+  critical
+}
+
+enum OperationDependencyType {
+  blocks
+  informs
+  reviews
+  produces_input_for
+}
+
+enum ArtifactStatus {
+  draft
+  generated
+  reviewed
+  finalized
+}
+
+enum RuntimeActorType {
+  operator
+  executive
+  division
+  worker
+  runtime
+}
+
+enum RuntimeTargetType {
+  forge
+  operation
+  artifact
+  worker
+  division
+  file
+  handoff
+  chat
+}
+
+enum RuntimeEventSeverity {
+  info
+  success
+  warning
+  error
+}
+
+model Forge {
+  id             String          @id @default(cuid())
+  slug           String          @unique
+  name           String
+  tagline        String
+  status         ForgeStatus     @default(active)
+  activePhase    String
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  divisions      Division[]
+  workers        Worker[]
+  operations     Operation[]
+  artifacts      Artifact[]
+  virtualFiles   VirtualFile[]
+  handoffs       Handoff[]
+  events         RuntimeEvent[]
+  snapshots      ForgeSnapshot[]
+  messages       ExecutiveMessage[]
+}
+
+model Division {
+  id          String        @id @default(cuid())
+  forgeId     String
+  forge       Forge         @relation(fields: [forgeId], references: [id], onDelete: Cascade)
+  name        String
+  objective   String
+  status      RuntimeStatus @default(idle)
+  progress    Int           @default(0)
+  order       Int
+  workers     Worker[]
+  operations  Operation[]
+  artifacts   Artifact[]
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@index([forgeId, order])
+}
+
+model Worker {
+  id              String        @id @default(cuid())
+  forgeId         String
+  forge           Forge         @relation(fields: [forgeId], references: [id], onDelete: Cascade)
+  divisionId      String
+  division        Division      @relation(fields: [divisionId], references: [id], onDelete: Cascade)
+  name            String
+  role            String
+  status          RuntimeStatus @default(idle)
+  currentTask     String?
+  contextManifest Json
+  externalAgentId String?
+  provider        String?
+  providerMetadata Json?
+  operations      Operation[]
+  artifacts       Artifact[]
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([forgeId, divisionId])
+}
+
+model Operation {
+  id             String            @id @default(cuid())
+  forgeId        String
+  forge          Forge             @relation(fields: [forgeId], references: [id], onDelete: Cascade)
+  divisionId     String
+  division       Division          @relation(fields: [divisionId], references: [id], onDelete: Cascade)
+  workerId       String?
+  worker         Worker?           @relation(fields: [workerId], references: [id], onDelete: SetNull)
+  title          String
+  description    String
+  status         RuntimeStatus     @default(planning)
+  priority       OperationPriority @default(normal)
+  progress       Int               @default(0)
+  blockedReason  String?
+  retryCount     Int               @default(0)
+  startedAt      DateTime?
+  completedAt    DateTime?
+  failedAt       DateTime?
+  outputs        Artifact[]
+  dependencyOf   OperationDependency[] @relation("OperationDependencyOf")
+  dependsOn      OperationDependency[] @relation("OperationDependsOn")
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  @@index([forgeId, status])
+  @@index([forgeId, divisionId])
+}
+
+model OperationDependency {
+  id                   String                  @id @default(cuid())
+  forgeId              String
+  operationId          String
+  operation            Operation               @relation("OperationDependencyOf", fields: [operationId], references: [id], onDelete: Cascade)
+  dependsOnOperationId String
+  dependsOnOperation   Operation               @relation("OperationDependsOn", fields: [dependsOnOperationId], references: [id], onDelete: Cascade)
+  type                 OperationDependencyType @default(blocks)
+
+  @@unique([operationId, dependsOnOperationId, type])
+  @@index([forgeId, operationId])
+}
+
+model Artifact {
+  id          String         @id @default(cuid())
+  forgeId     String
+  forge       Forge          @relation(fields: [forgeId], references: [id], onDelete: Cascade)
+  title       String
+  type        String
+  divisionId  String
+  division    Division       @relation(fields: [divisionId], references: [id], onDelete: Cascade)
+  workerId    String?
+  worker      Worker?        @relation(fields: [workerId], references: [id], onDelete: SetNull)
+  operationId String?
+  operation   Operation?     @relation(fields: [operationId], references: [id], onDelete: SetNull)
+  content     String
+  status      ArtifactStatus @default(draft)
+  version     Int            @default(1)
+  tags        String[]
+  files       ArtifactFile[]
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  @@index([forgeId, type])
+}
+
+model VirtualFile {
+  id          String         @id @default(cuid())
+  forgeId     String
+  forge       Forge          @relation(fields: [forgeId], references: [id], onDelete: Cascade)
+  path        String
+  content     String
+  status      ArtifactStatus @default(draft)
+  version     Int            @default(1)
+  divisionId  String?
+  workerId    String?
+  operationId String?
+  files       ArtifactFile[]
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  @@unique([forgeId, path])
+  @@index([forgeId, status])
+}
+
+model ArtifactFile {
+  id            String      @id @default(cuid())
+  artifactId    String
+  artifact      Artifact    @relation(fields: [artifactId], references: [id], onDelete: Cascade)
+  virtualFileId String
+  virtualFile   VirtualFile @relation(fields: [virtualFileId], references: [id], onDelete: Cascade)
+
+  @@unique([artifactId, virtualFileId])
+}
+
+model Handoff {
+  id              String   @id @default(cuid())
+  forgeId         String
+  forge           Forge    @relation(fields: [forgeId], references: [id], onDelete: Cascade)
+  fromDivisionId  String
+  toDivisionId    String
+  summary         String
+  deliverables    String[]
+  blockers        String[]
+  requiredContext String[]
+  confidence      Int
+  createdAt       DateTime @default(now())
+
+  @@index([forgeId, fromDivisionId, toDivisionId])
+}
+
+model RuntimeEvent {
+  id         String            @id @default(cuid())
+  forgeId    String
+  forge      Forge             @relation(fields: [forgeId], references: [id], onDelete: Cascade)
+  sequence   Int
+  type       String
+  actorType  RuntimeActorType
+  actorId    String?
+  targetType RuntimeTargetType?
+  targetId   String?
+  message    String
+  severity   RuntimeEventSeverity
+  payload    Json
+  createdAt  DateTime          @default(now())
+
+  @@unique([forgeId, sequence])
+  @@index([forgeId, sequence])
+}
+
+model RuntimeCommandLedger {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  createdAt DateTime @default(now())
+}
+
+model ForgeSnapshot {
+  id                String   @id @default(cuid())
+  forgeId           String
+  forge             Forge    @relation(fields: [forgeId], references: [id], onDelete: Cascade)
+  lastEventSequence Int
+  schemaVersion     Int      @default(1)
+  payload           Json
+  createdAt         DateTime @default(now())
+
+  @@index([forgeId, lastEventSequence])
+}
+
+model ExecutiveMessage {
+  id        String   @id @default(cuid())
+  forgeId   String
+  forge     Forge    @relation(fields: [forgeId], references: [id], onDelete: Cascade)
+  role      String
+  content   String
+  createdAt DateTime @default(now())
+
+  @@index([forgeId, createdAt])
+}
