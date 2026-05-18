@@ -2,71 +2,91 @@ import type { ForgeSnapshot } from "@/lib/runtime/types";
 
 const now = new Date("2026-05-17T20:00:00.000Z").toISOString();
 
+export interface CreateForgeSnapshotInput {
+  id: string;
+  slug: string;
+  name: string;
+  tagline?: string;
+  prefixEntityIds?: boolean;
+}
+
 export function createDemoSnapshot(): ForgeSnapshot {
+  return createForgeSnapshot({
+    id: "demo-forge",
+    slug: "demo",
+    name: "ForgeOS Demo Forge",
+    tagline: "An operating system for autonomous AI organizations."
+  });
+}
+
+export function createForgeSnapshot(input: CreateForgeSnapshotInput): ForgeSnapshot {
+  const tagline = input.tagline ?? "An operating system for autonomous AI organizations.";
+  const idFor = input.prefixEntityIds ? (id: string) => `${input.slug}-${id}` : (id: string) => id;
+
   const divisions = [
-    { id: "strategy", name: "Strategy Division", objective: "Shape the project direction and hackathon strategy.", status: "completed", progress: 100, order: 1 },
-    { id: "operations", name: "Operations Division", objective: "Coordinate handoffs, blockers, and organizational alignment.", status: "running", progress: 72, order: 2 },
-    { id: "engineering", name: "Engineering Division", objective: "Build the product through dependency-aware operations.", status: "running", progress: 61, order: 3 },
-    { id: "presentation", name: "Presentation Division", objective: "Create pitch narrative, demo flow, and judge positioning.", status: "reviewing", progress: 54, order: 4 },
-    { id: "qa", name: "QA Division", objective: "Review implementation, pitch, and organizational consistency.", status: "planning", progress: 22, order: 5 },
-    { id: "release", name: "Release Division", objective: "Finalize launch readiness, documentation, and demo path.", status: "idle", progress: 8, order: 6 }
+    { id: idFor("strategy"), name: "Strategy Division", objective: "Shape the project direction and hackathon strategy.", status: "completed", progress: 100, order: 1 },
+    { id: idFor("operations"), name: "Operations Division", objective: "Coordinate handoffs, blockers, and organizational alignment.", status: "running", progress: 72, order: 2 },
+    { id: idFor("engineering"), name: "Engineering Division", objective: "Build the product through dependency-aware operations.", status: "running", progress: 61, order: 3 },
+    { id: idFor("presentation"), name: "Presentation Division", objective: "Create pitch narrative, demo flow, and judge positioning.", status: "reviewing", progress: 54, order: 4 },
+    { id: idFor("qa"), name: "QA Division", objective: "Review implementation, pitch, and organizational consistency.", status: "planning", progress: 22, order: 5 },
+    { id: idFor("release"), name: "Release Division", objective: "Finalize launch readiness, documentation, and demo path.", status: "idle", progress: 8, order: 6 }
   ] as ForgeSnapshot["divisions"];
 
   const workers = [
-    worker("executive-ai", "operations", "Executive AI", "Runtime coordinator", "running", "Coordinating Forge status"),
-    worker("strategy-director", "strategy", "Strategy Director", "Project strategy owner", "completed", "Finalized Forge plan"),
-    worker("research-analyst", "strategy", "Research Analyst", "Competitive and sponsor research", "completed", "Delivered market scan"),
-    worker("ops-coordinator", "operations", "Engineering Coordinator", "Cross-division operations router", "running", "Routing engineering handoff"),
-    worker("eng-director", "engineering", "Engineering Director", "Technical execution owner", "running", "Sequencing implementation graph"),
-    worker("frontend-worker", "engineering", "Frontend Worker", "Command center UI specialist", "running", "Building dashboard shell"),
-    worker("backend-worker", "engineering", "Backend Worker", "Runtime and API specialist", "ready", "Waiting for schema lock"),
-    worker("testing-worker", "engineering", "Testing Worker", "Verification specialist", "blocked", "Waiting for UI contracts"),
-    worker("story-strategist", "presentation", "Story Strategist", "Pitch narrative owner", "reviewing", "Reviewing judge story"),
-    worker("qa-runner-alpha", "qa", "QA Runner Alpha", "Autonomous review runner", "planning", "Preparing validation plan"),
-    worker("release-director", "release", "Release Director", "Submission readiness owner", "idle", "Waiting for QA pass")
+    worker(idFor("executive-ai"), idFor("operations"), "Executive AI", "Runtime coordinator", "running", "Coordinating Forge status"),
+    worker(idFor("strategy-director"), idFor("strategy"), "Strategy Director", "Project strategy owner", "completed", "Finalized Forge plan"),
+    worker(idFor("research-analyst"), idFor("strategy"), "Research Analyst", "Competitive and sponsor research", "completed", "Delivered market scan"),
+    worker(idFor("ops-coordinator"), idFor("operations"), "Engineering Coordinator", "Cross-division operations router", "running", "Routing engineering handoff"),
+    worker(idFor("eng-director"), idFor("engineering"), "Engineering Director", "Technical execution owner", "running", "Sequencing implementation graph"),
+    worker(idFor("frontend-worker"), idFor("engineering"), "Frontend Worker", "Command center UI specialist", "running", "Building dashboard shell"),
+    worker(idFor("backend-worker"), idFor("engineering"), "Backend Worker", "Runtime and API specialist", "ready", "Waiting for schema lock"),
+    worker(idFor("testing-worker"), idFor("engineering"), "Testing Worker", "Verification specialist", "blocked", "Waiting for UI contracts"),
+    worker(idFor("story-strategist"), idFor("presentation"), "Story Strategist", "Pitch narrative owner", "reviewing", "Reviewing judge story"),
+    worker(idFor("qa-runner-alpha"), idFor("qa"), "QA Runner Alpha", "Autonomous review runner", "planning", "Preparing validation plan"),
+    worker(idFor("release-director"), idFor("release"), "Release Director", "Submission readiness owner", "idle", "Waiting for QA pass")
   ] as ForgeSnapshot["workers"];
 
   const operations = [
-    op("op-strategy-plan", "strategy", "strategy-director", "Finalize Forge strategy", "Define scope, judge angle, risks, and execution roadmap.", "completed", 100, []),
-    op("op-research", "strategy", "research-analyst", "Research sponsor alignment", "Identify competitive framing and sponsor-friendly capabilities.", "completed", 100, []),
-    op("op-handoff-eng", "operations", "ops-coordinator", "Prepare engineering handoff", "Convert strategy into build-ready operations and constraints.", "completed", 100, ["artifact-strategy"]),
-    op("op-runtime", "engineering", "backend-worker", "Implement runtime contracts", "Create RuntimeStore, event stream, scheduler, and mock adapter.", "ready", 25, []),
-    op("op-dashboard", "engineering", "frontend-worker", "Build Forge Command Center", "Render cockpit, org map, operations board, inspector, and console.", "running", 58, []),
-    op("op-tests", "engineering", "testing-worker", "Verify runtime and UI", "Cover event ordering, dependency readiness, APIs, and golden flow.", "blocked", 10, [], "Waiting for runtime contracts"),
-    op("op-pitch", "presentation", "story-strategist", "Draft demo narrative", "Create pitch outline and demo script aligned to ForgeOS value.", "reviewing", 61, ["artifact-pitch"]),
-    op("op-qa", "qa", "qa-runner-alpha", "Run organizational review", "Inspect output quality, security risks, and release readiness.", "planning", 15, []),
-    op("op-release", "release", "release-director", "Prepare release pass", "Finalize README, checklist, and submission readiness.", "planning", 5, [])
+    op(idFor("op-strategy-plan"), idFor("strategy"), idFor("strategy-director"), "Finalize Forge strategy", "Define scope, judge angle, risks, and execution roadmap.", "completed", 100, []),
+    op(idFor("op-research"), idFor("strategy"), idFor("research-analyst"), "Research sponsor alignment", "Identify competitive framing and sponsor-friendly capabilities.", "completed", 100, []),
+    op(idFor("op-handoff-eng"), idFor("operations"), idFor("ops-coordinator"), "Prepare engineering handoff", "Convert strategy into build-ready operations and constraints.", "completed", 100, [idFor("artifact-strategy")]),
+    op(idFor("op-runtime"), idFor("engineering"), idFor("backend-worker"), "Implement runtime contracts", "Create RuntimeStore, event stream, scheduler, and mock adapter.", "ready", 25, []),
+    op(idFor("op-dashboard"), idFor("engineering"), idFor("frontend-worker"), "Build Forge Command Center", "Render cockpit, org map, operations board, inspector, and console.", "running", 58, []),
+    op(idFor("op-tests"), idFor("engineering"), idFor("testing-worker"), "Verify runtime and UI", "Cover event ordering, dependency readiness, APIs, and golden flow.", "blocked", 10, [], "Waiting for runtime contracts"),
+    op(idFor("op-pitch"), idFor("presentation"), idFor("story-strategist"), "Draft demo narrative", "Create pitch outline and demo script aligned to ForgeOS value.", "reviewing", 61, [idFor("artifact-pitch")]),
+    op(idFor("op-qa"), idFor("qa"), idFor("qa-runner-alpha"), "Run organizational review", "Inspect output quality, security risks, and release readiness.", "planning", 15, []),
+    op(idFor("op-release"), idFor("release"), idFor("release-director"), "Prepare release pass", "Finalize README, checklist, and submission readiness.", "planning", 5, [])
   ] as ForgeSnapshot["operations"];
 
   const dependencies = [
-    dep("dep-runtime-handoff", "op-runtime", "op-handoff-eng"),
-    dep("dep-dashboard-runtime", "op-dashboard", "op-runtime", "informs"),
-    dep("dep-tests-runtime", "op-tests", "op-runtime"),
-    dep("dep-qa-dashboard", "op-qa", "op-dashboard"),
-    dep("dep-qa-pitch", "op-qa", "op-pitch"),
-    dep("dep-release-qa", "op-release", "op-qa")
+    dep(idFor("dep-runtime-handoff"), idFor("op-runtime"), idFor("op-handoff-eng")),
+    dep(idFor("dep-dashboard-runtime"), idFor("op-dashboard"), idFor("op-runtime"), "informs"),
+    dep(idFor("dep-tests-runtime"), idFor("op-tests"), idFor("op-runtime")),
+    dep(idFor("dep-qa-dashboard"), idFor("op-qa"), idFor("op-dashboard")),
+    dep(idFor("dep-qa-pitch"), idFor("op-qa"), idFor("op-pitch")),
+    dep(idFor("dep-release-qa"), idFor("op-release"), idFor("op-qa"))
   ] as ForgeSnapshot["dependencies"];
 
   const artifacts = [
-    artifact("artifact-strategy", "ForgeOS Project Plan", "project_plan", "strategy", "strategy-director", "op-strategy-plan", "A serious AI organization runtime for hackathon execution with visible hierarchy, artifacts, handoffs, and release pass.", "finalized", ["strategy", "scope"]),
-    artifact("artifact-architecture", "Runtime Architecture Proposal", "architecture_plan", "engineering", "eng-director", "op-runtime", "Server-authoritative snapshot plus append-only events, strict runtime adapters, and virtual workspace boundaries.", "generated", ["runtime", "events"]),
-    artifact("artifact-pitch", "Presentation Outline", "pitch_outline", "presentation", "story-strategist", "op-pitch", "Position ForgeOS as Kubernetes for autonomous AI organizations, focused on command visibility and execution confidence.", "generated", ["pitch", "judges"]),
-    artifact("artifact-qa", "QA Risk Register", "review_report", "qa", "qa-runner-alpha", "op-qa", "Open risks: endpoint hardening, event ordering, XSS in rendered generated content, and real-agent adapter contract drift.", "draft", ["qa", "security"])
+    artifact(idFor("artifact-strategy"), "ForgeOS Project Plan", "project_plan", idFor("strategy"), idFor("strategy-director"), idFor("op-strategy-plan"), "A serious AI organization runtime for hackathon execution with visible hierarchy, artifacts, handoffs, and release pass.", "finalized", ["strategy", "scope"]),
+    artifact(idFor("artifact-architecture"), "Runtime Architecture Proposal", "architecture_plan", idFor("engineering"), idFor("eng-director"), idFor("op-runtime"), "Server-authoritative snapshot plus append-only events, strict runtime adapters, and virtual workspace boundaries.", "generated", ["runtime", "events"]),
+    artifact(idFor("artifact-pitch"), "Presentation Outline", "pitch_outline", idFor("presentation"), idFor("story-strategist"), idFor("op-pitch"), "Position ForgeOS as Kubernetes for autonomous AI organizations, focused on command visibility and execution confidence.", "generated", ["pitch", "judges"]),
+    artifact(idFor("artifact-qa"), "QA Risk Register", "review_report", idFor("qa"), idFor("qa-runner-alpha"), idFor("op-qa"), "Open risks: endpoint hardening, event ordering, XSS in rendered generated content, and real-agent adapter contract drift.", "draft", ["qa", "security"])
   ] as ForgeSnapshot["artifacts"];
 
   const files = [
-    file("file-readme", "README.md", "# ForgeOS\n\nAn operating system for autonomous AI organizations.\n", "generated", "strategy", "strategy-director", "op-strategy-plan", ["artifact-strategy"]),
-    file("file-page", "src/app/page.tsx", "export default function Page() {\n  return <ForgeCommandCenter />\n}\n", "draft", "engineering", "frontend-worker", "op-dashboard", ["artifact-architecture"]),
-    file("file-plan", "docs/project-plan.md", "# Project Plan\n\nForgeOS command center, runtime, and release pipeline.\n", "finalized", "strategy", "strategy-director", "op-strategy-plan", ["artifact-strategy"]),
-    file("file-pitch", "pitch/presentation-outline.md", "# Pitch Outline\n\nProblem, autonomous organization runtime, demo flow, and release pass.\n", "generated", "presentation", "story-strategist", "op-pitch", ["artifact-pitch"]),
-    file("file-qa", "review/qa-report.md", "# QA Report\n\nRuntime state and command APIs require focused validation.\n", "draft", "qa", "qa-runner-alpha", "op-qa", ["artifact-qa"])
+    file(idFor("file-readme"), "README.md", "# ForgeOS\n\nAn operating system for autonomous AI organizations.\n", "generated", idFor("strategy"), idFor("strategy-director"), idFor("op-strategy-plan"), [idFor("artifact-strategy")]),
+    file(idFor("file-page"), "src/app/page.tsx", "export default function Page() {\n  return <ForgeCommandCenter />\n}\n", "draft", idFor("engineering"), idFor("frontend-worker"), idFor("op-dashboard"), [idFor("artifact-architecture")]),
+    file(idFor("file-plan"), "docs/project-plan.md", "# Project Plan\n\nForgeOS command center, runtime, and release pipeline.\n", "finalized", idFor("strategy"), idFor("strategy-director"), idFor("op-strategy-plan"), [idFor("artifact-strategy")]),
+    file(idFor("file-pitch"), "pitch/presentation-outline.md", "# Pitch Outline\n\nProblem, autonomous organization runtime, demo flow, and release pass.\n", "generated", idFor("presentation"), idFor("story-strategist"), idFor("op-pitch"), [idFor("artifact-pitch")]),
+    file(idFor("file-qa"), "review/qa-report.md", "# QA Report\n\nRuntime state and command APIs require focused validation.\n", "draft", idFor("qa"), idFor("qa-runner-alpha"), idFor("op-qa"), [idFor("artifact-qa")])
   ];
 
   const handoffs = [
     {
-      id: "handoff-strategy-ops",
-      fromDivisionId: "strategy",
-      toDivisionId: "operations",
+      id: idFor("handoff-strategy-ops"),
+      fromDivisionId: idFor("strategy"),
+      toDivisionId: idFor("operations"),
       summary: "Strategy has locked the product identity, core scope, and MVP operating model.",
       deliverables: ["Project plan", "Competitive positioning", "Scope constraints"],
       blockers: [],
@@ -75,9 +95,9 @@ export function createDemoSnapshot(): ForgeSnapshot {
       createdAt: now
     },
     {
-      id: "handoff-ops-eng",
-      fromDivisionId: "operations",
-      toDivisionId: "engineering",
+      id: idFor("handoff-ops-eng"),
+      fromDivisionId: idFor("operations"),
+      toDivisionId: idFor("engineering"),
       summary: "Engineering can proceed with runtime contracts and command center shell.",
       deliverables: ["Operation graph", "Runtime boundaries", "UI panel priorities"],
       blockers: ["Testing waits for runtime event contract"],
@@ -88,30 +108,30 @@ export function createDemoSnapshot(): ForgeSnapshot {
   ];
 
   const messages = [
-    { id: "msg-1", role: "executive", content: "Forge initialized. Strategy is complete, engineering is active, and QA is preparing the release review.", createdAt: now },
-    { id: "msg-2", role: "operator", content: "Surface the current blockers.", createdAt: now },
-    { id: "msg-3", role: "executive", content: "Primary blocker: testing worker is waiting for runtime contracts. Recommendation: lock RuntimeEvent and ForgeSnapshot before broad UI expansion.", createdAt: now }
+    { id: idFor("msg-1"), role: "executive", content: "Forge initialized. Strategy is complete, engineering is active, and QA is preparing the release review.", createdAt: now },
+    { id: idFor("msg-2"), role: "operator", content: "Surface the current blockers.", createdAt: now },
+    { id: idFor("msg-3"), role: "executive", content: "Primary blocker: testing worker is waiting for runtime contracts. Recommendation: lock RuntimeEvent and ForgeSnapshot before broad UI expansion.", createdAt: now }
   ] as ForgeSnapshot["messages"];
 
   const events = [
-    event(1, "forge.initialized", "runtime", "forge", "demo-forge", "Forge initialized with seeded autonomous organization.", "success"),
-    event(2, "operation.completed", "worker", "operation", "op-strategy-plan", "Strategy plan finalized.", "success"),
-    event(3, "handoff.created", "division", "handoff", "handoff-strategy-ops", "Strategy handed execution context to Operations.", "info"),
-    event(4, "operation.started", "worker", "operation", "op-dashboard", "Frontend Worker started the command center.", "info"),
-    event(5, "operation.blocked", "worker", "operation", "op-tests", "Testing is blocked on runtime contract completion.", "warning")
+    event(input.id, idFor, 1, "forge.initialized", "runtime", "forge", input.id, "Forge initialized with seeded autonomous organization.", "success"),
+    event(input.id, idFor, 2, "operation.completed", "worker", "operation", idFor("op-strategy-plan"), "Strategy plan finalized.", "success"),
+    event(input.id, idFor, 3, "handoff.created", "division", "handoff", idFor("handoff-strategy-ops"), "Strategy handed execution context to Operations.", "info"),
+    event(input.id, idFor, 4, "operation.started", "worker", "operation", idFor("op-dashboard"), "Frontend Worker started the command center.", "info"),
+    event(input.id, idFor, 5, "operation.blocked", "worker", "operation", idFor("op-tests"), "Testing is blocked on runtime contract completion.", "warning")
   ];
 
   return {
     forge: {
-      id: "demo-forge",
-      slug: "demo",
-      name: "ForgeOS Demo Forge",
-      tagline: "An operating system for autonomous AI organizations.",
+      id: input.id,
+      slug: input.slug,
+      name: input.name,
+      tagline,
       activePhase: "Autonomous Development",
       status: "active"
     },
     lastEventSequence: events.length,
-    schemaVersion: 1,
+    schemaVersion: 2,
     divisions,
     workers,
     operations,
@@ -190,6 +210,8 @@ function file(
 }
 
 function event(
+  forgeId: string,
+  idFor: (id: string) => string,
   sequence: number,
   type: ForgeSnapshot["events"][number]["type"],
   actorType: ForgeSnapshot["events"][number]["actorType"],
@@ -199,8 +221,8 @@ function event(
   severity: ForgeSnapshot["events"][number]["severity"]
 ) {
   return {
-    id: `event-${sequence}`,
-    forgeId: "demo-forge",
+    id: idFor(`event-${sequence}`),
+    forgeId,
     sequence,
     type,
     actorType,

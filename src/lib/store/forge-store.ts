@@ -21,7 +21,7 @@ interface ForgeStore {
   commandPending: boolean;
   commandError: string | null;
   hydrate: (snapshot: ForgeSnapshot) => void;
-  connectEventStream: () => () => void;
+  connectEventStream: (forgeSlug?: string, lastSequence?: number) => () => void;
   selectNode: (selection: Selection) => void;
   setPanel: (panel: ForgeStore["activePanel"]) => void;
   setInspectorTab: (tab: ForgeStore["inspectorTab"]) => void;
@@ -37,20 +37,30 @@ export const useForgeStore = create<ForgeStore>((set, get) => ({
   commandError: null,
   hydrate: (snapshot) =>
     set((state) => {
+      if (state.snapshot?.forge.slug && state.snapshot.forge.slug !== snapshot.forge.slug) {
+        return { snapshot, selected: { type: "forge", id: snapshot.forge.id }, commandError: null };
+      }
+
       if (state.snapshot && state.snapshot.lastEventSequence > snapshot.lastEventSequence) {
         return { selected: state.selected ?? { type: "forge", id: state.snapshot.forge.id } };
       }
 
       return { snapshot, selected: state.selected ?? { type: "forge", id: snapshot.forge.id } };
     }),
-  connectEventStream: () => connectRuntimeEventStream(set, () => get().snapshot?.lastEventSequence ?? 0),
+  connectEventStream: (forgeSlug, lastSequence) => connectRuntimeEventStream(set, forgeSlug, lastSequence ?? get().snapshot?.lastEventSequence ?? 0),
   selectNode: (selected) => set({ selected }),
   setPanel: (activePanel) => set({ activePanel }),
   setInspectorTab: (inspectorTab) => set({ inspectorTab }),
   runCommand: async (command) => {
     set({ commandPending: true, commandError: null });
     try {
-      const response = await fetch("/api/runtime/commands", {
+      const forgeSlug = getCurrentPageForgeSlug() ?? get().snapshot?.forge.slug;
+      if (!forgeSlug) {
+        set({ commandError: "Runtime command failed.", commandPending: false });
+        return;
+      }
+
+      const response = await fetch(`/api/forges/${forgeSlug}/commands`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ ...command, idempotencyKey: `${command.type}-${Date.now()}` })
@@ -74,12 +84,14 @@ export function selectMetrics(snapshot: ForgeSnapshot | null) {
 }
 
 let eventSource: EventSource | null = null;
+let eventSourceSlug: string | null = null;
 let subscribers = 0;
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
 
 function connectRuntimeEventStream(
   set: (partial: Partial<ForgeStore> | ((state: ForgeStore) => Partial<ForgeStore>)) => void,
-  getLastSequence: () => number
+  forgeSlug: string | undefined,
+  lastSequence: number
 ) {
   if (typeof window === "undefined") {
     return () => undefined;
@@ -87,11 +99,25 @@ function connectRuntimeEventStream(
 
   subscribers += 1;
 
+  const resolvedForgeSlug = forgeSlug ?? useForgeStore.getState().snapshot?.forge.slug;
+  if (!resolvedForgeSlug) {
+    return () => {
+      subscribers = Math.max(0, subscribers - 1);
+    };
+  }
+
+  if (eventSource && eventSourceSlug !== resolvedForgeSlug) {
+    eventSource.close();
+    eventSource = null;
+    eventSourceSlug = null;
+  }
+
   if (!eventSource) {
-    eventSource = new EventSource(`/api/forge/current/events/stream?afterSequence=${getLastSequence()}`);
+    eventSourceSlug = resolvedForgeSlug;
+    eventSource = new EventSource(`/api/forges/${resolvedForgeSlug}/events/stream?afterSequence=${lastSequence}`);
     eventSource.addEventListener("runtime.event", (message) => {
       const event = JSON.parse(message.data) as RuntimeEvent;
-      scheduleSnapshotRefresh(set, event.sequence);
+      scheduleSnapshotRefresh(set, resolvedForgeSlug, event.sequence);
     });
   }
 
@@ -100,6 +126,7 @@ function connectRuntimeEventStream(
     if (subscribers === 0 && eventSource) {
       eventSource.close();
       eventSource = null;
+      eventSourceSlug = null;
     }
     if (subscribers === 0 && refreshTimer) {
       clearTimeout(refreshTimer);
@@ -108,8 +135,18 @@ function connectRuntimeEventStream(
   };
 }
 
+function getCurrentPageForgeSlug() {
+  if (typeof window === "undefined") {
+    return undefined;
+  }
+
+  const match = window.location.pathname.match(/^\/forge\/([^/?#]+)/);
+  return match?.[1] ? decodeURIComponent(match[1]) : undefined;
+}
+
 function scheduleSnapshotRefresh(
   set: (partial: Partial<ForgeStore> | ((state: ForgeStore) => Partial<ForgeStore>)) => void,
+  forgeSlug: string,
   eventSequence: number
 ) {
   if (refreshTimer) {
@@ -118,7 +155,7 @@ function scheduleSnapshotRefresh(
 
   refreshTimer = setTimeout(async () => {
     refreshTimer = null;
-    const response = await fetch("/api/forge/current/snapshot", { cache: "no-store" });
+    const response = await fetch(`/api/forges/${forgeSlug}/snapshot`, { cache: "no-store" });
     const payload = (await response.json()) as { success: boolean; data?: ForgeSnapshot };
     if (!payload.success || !payload.data) {
       return;

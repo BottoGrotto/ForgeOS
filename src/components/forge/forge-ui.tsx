@@ -2,23 +2,27 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Activity, Boxes, FileText, Gauge, GitBranch, LayoutDashboard, Network, ShieldCheck, Users } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Activity, ArrowLeft, Boxes, FileText, Gauge, GitBranch, LayoutDashboard, Network, Replace, ShieldCheck, Users, X } from "lucide-react";
+import type { ForgeSummary } from "@/lib/runtime/persistence";
 import type { ForgeSnapshot, RuntimeStatus } from "@/lib/runtime/types";
 import { deriveForgeMetrics } from "@/lib/runtime/metrics";
 import { statusClass } from "./status";
 
 const navItems = [
-  { href: "/forge/demo", label: "Overview", icon: LayoutDashboard },
-  { href: "/forge/demo/org", label: "Organization", icon: Network },
-  { href: "/forge/demo/operations", label: "Operations", icon: GitBranch },
-  { href: "/forge/demo/workspace", label: "Workspace", icon: FileText },
-  { href: "/forge/demo/assets", label: "Assets", icon: Boxes },
-  { href: "/forge/demo/logs", label: "Logs", icon: Activity }
+  { path: "", label: "Overview", icon: LayoutDashboard },
+  { path: "/org", label: "Organization", icon: Network },
+  { path: "/operations", label: "Operations", icon: GitBranch },
+  { path: "/workspace", label: "Workspace", icon: FileText },
+  { path: "/assets", label: "Assets", icon: Boxes },
+  { path: "/logs", label: "Logs", icon: Activity }
 ];
 
 export function ForgeShell({ snapshot, children }: { snapshot: ForgeSnapshot; children: React.ReactNode }) {
   const pathname = usePathname();
   const metrics = deriveForgeMetrics(snapshot);
+  const basePath = `/forge/${snapshot.forge.slug}`;
+  const [switcherOpen, setSwitcherOpen] = useState(false);
 
   return (
     <main className="min-h-screen bg-forge-bg text-forge-text">
@@ -36,15 +40,33 @@ export function ForgeShell({ snapshot, children }: { snapshot: ForgeSnapshot; ch
                 <span className="font-semibold text-white">{metrics.progress}%</span>
               </div>
               <Progress value={metrics.progress} />
+              <div className="mt-3 flex flex-wrap justify-end gap-2">
+                <Link
+                  href="/forges"
+                  className="flex items-center gap-2 rounded border border-forge-line px-3 py-2 text-sm text-slate-200 hover:border-forge-cyan"
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                  Forges
+                </Link>
+                <button
+                  type="button"
+                  className="flex items-center gap-2 rounded border border-forge-line px-3 py-2 text-sm text-slate-200 hover:border-forge-cyan"
+                  onClick={() => setSwitcherOpen(true)}
+                >
+                  <Replace className="h-4 w-4" />
+                  Switch Forge
+                </button>
+              </div>
             </div>
           </div>
           <nav className="scrollbar flex gap-2 overflow-x-auto px-3 py-3">
             {navItems.map((item) => {
-              const active = pathname === item.href;
+              const href = `${basePath}${item.path}`;
+              const active = pathname === href;
               return (
                 <Link
-                  key={item.href}
-                  href={item.href}
+                  key={href}
+                  href={href}
                   className={`flex shrink-0 items-center gap-2 rounded border px-3 py-2 text-sm ${
                     active ? "border-forge-cyan bg-forge-cyan/10 text-white" : "border-forge-line text-forge-muted hover:border-forge-cyan"
                   }`}
@@ -58,7 +80,105 @@ export function ForgeShell({ snapshot, children }: { snapshot: ForgeSnapshot; ch
         </header>
         {children}
       </div>
+      {switcherOpen ? <ForgeSwitcherModal currentSlug={snapshot.forge.slug} onClose={() => setSwitcherOpen(false)} /> : null}
     </main>
+  );
+}
+
+function ForgeSwitcherModal({ currentSlug, onClose }: { currentSlug: string; onClose: () => void }) {
+  const [forges, setForges] = useState<ForgeSummary[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadForges() {
+      setLoading(true);
+      setError(null);
+      try {
+        const response = await fetch("/api/forges", { cache: "no-store" });
+        const payload = (await response.json()) as { success: boolean; data?: { forges: ForgeSummary[] }; error?: string };
+        if (!active) {
+          return;
+        }
+        if (!payload.success || !payload.data) {
+          setError(payload.error ?? "Forge list failed.");
+          return;
+        }
+        setForges(payload.data.forges);
+      } catch {
+        if (active) {
+          setError("Forge list failed.");
+        }
+      } finally {
+        if (active) {
+          setLoading(false);
+        }
+      }
+    }
+
+    void loadForges();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    }
+
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [onClose]);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-6" role="dialog" aria-modal="true" aria-labelledby="forge-switcher-title">
+      <div className="w-full max-w-2xl rounded-lg border border-forge-line bg-forge-panel shadow-command">
+        <div className="flex items-center justify-between border-b border-forge-line px-4 py-3">
+          <div>
+            <h2 id="forge-switcher-title" className="font-semibold text-white">Switch Forge</h2>
+            <div className="mt-1 text-sm text-forge-muted">Open another active Forge instance.</div>
+          </div>
+          <button type="button" className="rounded border border-forge-line p-2 text-forge-muted hover:border-forge-cyan hover:text-white" onClick={onClose} aria-label="Close switcher">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="scrollbar max-h-[60vh] overflow-auto p-4">
+          {loading ? <EmptyState text="Loading Forge instances." /> : null}
+          {error ? <div className="rounded border border-red-400/30 bg-red-500/10 p-3 text-sm text-red-100">{error}</div> : null}
+          {!loading && !error ? (
+            <div className="space-y-2">
+              {forges.map((forge) => {
+                const current = forge.slug === currentSlug;
+                return (
+                  <Link
+                    key={forge.id}
+                    href={`/forge/${forge.slug}`}
+                    className={`block rounded border p-3 hover:border-forge-cyan ${current ? "border-forge-cyan bg-forge-cyan/10" : "border-forge-line bg-black/20"}`}
+                    onClick={onClose}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="truncate font-semibold text-white">{forge.name}</div>
+                        <div className="mt-1 text-xs text-forge-muted">/{forge.slug}</div>
+                      </div>
+                      <span className="shrink-0 rounded border border-forge-line px-2 py-1 text-xs text-forge-muted">{current ? "current" : forge.status}</span>
+                    </div>
+                    <div className="mt-3 text-sm text-slate-300">{forge.activePhase}</div>
+                  </Link>
+                );
+              })}
+              {forges.length === 0 ? <EmptyState text="No Forge instances exist yet." /> : null}
+            </div>
+          ) : null}
+        </div>
+      </div>
+      <button className="absolute inset-0 -z-10 cursor-default" type="button" aria-label="Close switcher overlay" onClick={onClose} />
+    </div>
   );
 }
 

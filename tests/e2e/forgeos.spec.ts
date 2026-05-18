@@ -1,9 +1,20 @@
 import { expect, test } from "@playwright/test";
 
 test("operator can run the ForgeOS demo flow", async ({ page }) => {
-  await page.goto("/forge/demo");
+  const waitForRuntimeCommand = async () => {
+    const response = await page.waitForResponse((candidate) => /\/api\/forges\/[^/]+\/commands/.test(candidate.url()));
+    expect(response.status()).toBe(200);
+    return response;
+  };
+  const forgeName = `E2E Forge ${Date.now()}`;
+  const forgeSlug = forgeName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 
-  await expect(page.getByRole("heading", { name: "ForgeOS Demo Forge" })).toBeVisible();
+  await page.goto("/forges");
+  await page.getByPlaceholder("New Forge name").fill(forgeName);
+  await page.getByRole("button", { name: "Create Forge" }).click();
+  await expect(page).toHaveURL(new RegExp(`/forge/${forgeSlug}$`));
+
+  await expect(page.getByRole("heading", { name: forgeName })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Project Completeness Board" })).toBeVisible();
   await expect(page.getByText("These are operations that currently prevent downstream work")).toBeVisible();
   await expect(page.getByText("Why blocked")).toBeVisible();
@@ -11,23 +22,32 @@ test("operator can run the ForgeOS demo flow", async ({ page }) => {
   await expect(page.getByText("Complete").first()).toBeVisible();
   await expect(page.getByText("In Progress").first()).toBeVisible();
   await expect(page.getByText("Not Started").first()).toBeVisible();
-  await page.getByRole("button", { name: /Shutdown/ }).click();
+  await Promise.all([waitForRuntimeCommand(), page.getByRole("button", { name: /Shutdown/ }).click()]);
   await expect(page.getByText("Safe Shutdown").first()).toBeVisible();
-  await page.getByRole("button", { name: /Resume/ }).click();
+  await Promise.all([waitForRuntimeCommand(), page.getByRole("button", { name: /Resume/ }).click()]);
   await expect(page.getByRole("button", { name: /Shutdown/ })).toBeVisible();
-  await page.getByRole("button", { name: /Reset/ }).click();
+  await Promise.all([waitForRuntimeCommand(), page.getByRole("button", { name: /Reset/ }).click()]);
   await expect(page.getByText("Autonomous Development").first()).toBeVisible();
 
-  await page.getByRole("link", { name: /Verify runtime and UI/ }).first().click();
-  await expect(page).toHaveURL(/operation=op-tests/);
+  await page.getByRole("link", { name: "Operations", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Operations Board" })).toBeVisible();
+  await expect(page.getByText("Implement runtime contracts").first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "Run Selected Operation" })).toBeEnabled();
+  await Promise.all([waitForRuntimeCommand(), page.getByRole("button", { name: "Run Selected Operation" }).click()]);
+  await expect(page.getByRole("button", { name: "Select a Ready Operation" })).toBeDisabled();
+  await expect(page.getByText("Operations can run only when the Forge is active and the selected operation is ready.")).toBeVisible();
+  await expect(page.getByText("Verify runtime and UI").first()).toBeVisible();
+
+  await page.getByRole("button", { name: /Verify runtime and UI/ }).first().click();
+  await expect(page).toHaveURL(/operation=.*op-tests/);
   await expect(page.getByRole("heading", { name: "Operations Board" })).toBeVisible();
   await expect(page.getByText("Cover event ordering, dependency readiness, APIs, and golden flow.").first()).toBeVisible();
-  await page.getByRole("link", { name: /Overview/ }).click();
-  await Promise.all([
-    page.waitForResponse((response) => response.url().includes("/api/runtime/commands") && response.status() === 200),
-    page.getByRole("button", { name: /Run Flow/ }).click()
-  ]);
+  await page.goto(`/forge/${forgeSlug}`);
+  await expect(page.getByRole("button", { name: /Run Flow/ })).toBeEnabled();
+  await Promise.all([waitForRuntimeCommand(), page.getByRole("button", { name: /Run Flow/ }).click()]);
   await expect(page.getByText("Deployment Ready").first()).toBeVisible();
+  await page.getByRole("link", { name: /Logs/ }).click();
+  await expect(page.getByText("Full autonomous flow completed").first()).toBeVisible();
 
   await page.getByRole("link", { name: /Organization/ }).click();
   await expect(page.getByRole("heading", { name: "Agent Organization Map" })).toBeVisible();
@@ -43,10 +63,59 @@ test("operator can run the ForgeOS demo flow", async ({ page }) => {
   await page.getByPlaceholder("Search title, worker, division, status, blocker").fill("");
 
   await page.getByRole("link", { name: /Workspace/ }).click();
+  await expect(page.getByRole("heading", { name: "GitHub Repository" })).toBeVisible();
+  await page.getByPlaceholder("octo-org").fill("BottoGrotto");
+  await page.getByPlaceholder("forgeos").fill("ForgeOS");
+  await page.getByLabel("Working Branch").fill("forge/repository-v1");
+  await Promise.all([waitForRuntimeCommand(), page.getByRole("button", { name: "Connect", exact: true }).click()]);
+  await expect(page.getByText("BottoGrotto/ForgeOS").first()).toBeVisible();
+  await Promise.all([waitForRuntimeCommand(), page.getByRole("button", { name: "Refresh" }).click()]);
+  await expect(page.getByText("Refreshed")).toBeVisible();
+  await Promise.all([waitForRuntimeCommand(), page.getByRole("button", { name: "Disconnect" }).click()]);
+  await expect(page.getByText("No GitHub repository metadata is connected.")).toBeVisible();
   await expect(page.getByRole("button", { name: "README.md" })).toBeVisible();
   await page.getByRole("button", { name: "README.md" }).click();
   await expect(page.getByText("An operating system for autonomous AI organizations.").first()).toBeVisible();
 
   await page.getByRole("link", { name: /Logs/ }).click();
-  await expect(page.getByText("Full autonomous flow completed").first()).toBeVisible();
+  await expect(page.getByText("GitHub repository disconnected").first()).toBeVisible();
+});
+
+test("/forge/demo is not a compatibility route", async ({ page }) => {
+  const response = await page.goto("/forge/demo");
+  expect(response?.status()).toBe(404);
+});
+
+test("operator can return to the Forge index and switch Forge instances", async ({ page, request }) => {
+  const waitForRuntimeCommand = async () => {
+    const response = await page.waitForResponse((candidate) => /\/api\/forges\/[^/]+\/commands/.test(candidate.url()));
+    expect(response.status()).toBe(200);
+    return response;
+  };
+  const firstName = `Switcher First ${Date.now()}`;
+  const secondName = `Switcher Second ${Date.now()}`;
+  const firstSlug = firstName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+
+  await page.goto("/forges");
+  await page.getByPlaceholder("New Forge name").fill(firstName);
+  await page.getByRole("button", { name: "Create Forge" }).click();
+  await expect(page).toHaveURL(new RegExp(`/forge/${firstSlug}$`));
+  await expect(page.getByRole("heading", { name: firstName })).toBeVisible();
+
+  await page.getByRole("link", { name: "Forges" }).click();
+  await expect(page).toHaveURL(/\/forges$/);
+  await page.getByRole("link", { name: new RegExp(firstName) }).click();
+
+  const response = await request.post("/api/forges", { data: { name: secondName } });
+  expect(response.status()).toBe(201);
+  const payload = (await response.json()) as { data: { forge: { slug: string } } };
+
+  await page.getByRole("button", { name: "Switch Forge" }).click();
+  await expect(page.getByRole("dialog", { name: "Switch Forge" })).toBeVisible();
+  await expect(page.getByRole("link", { name: new RegExp(firstName) })).toBeVisible();
+  await page.getByRole("link", { name: new RegExp(secondName) }).click();
+  await expect(page).toHaveURL(new RegExp(`/forge/${payload.data.forge.slug}$`));
+  await expect(page.getByRole("heading", { name: secondName })).toBeVisible();
+  await Promise.all([waitForRuntimeCommand(), page.getByRole("button", { name: /Run Flow/ }).click()]);
+  await expect(page.getByText("Deployment Ready").first()).toBeVisible();
 });

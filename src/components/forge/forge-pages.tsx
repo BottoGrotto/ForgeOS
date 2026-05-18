@@ -1,9 +1,9 @@
 "use client";
 
 import { Suspense, useEffect, useMemo, useState } from "react";
-import { Bot, Play, Power, RotateCcw } from "lucide-react";
+import { Bot, Github, Link, Play, Power, RefreshCw, RotateCcw, Unplug } from "lucide-react";
 import { useSearchParams } from "next/navigation";
-import type { Division, ForgeSnapshot, Operation, RuntimeEvent, RuntimeStatus, VirtualFile, Worker } from "@/lib/runtime/types";
+import type { Division, ForgeRepositorySnapshot, ForgeSnapshot, Operation, RuntimeEvent, RuntimeStatus, VirtualFile, Worker } from "@/lib/runtime/types";
 import { deriveForgeMetrics } from "@/lib/runtime/metrics";
 import { useForgeStore } from "@/lib/store/forge-store";
 import { severityClass } from "./status";
@@ -12,7 +12,7 @@ import { EmptyState, ForgeShell, MetricsGrid, Panel, Progress, StatusBadge } fro
 export function OverviewPage({ initialSnapshot }: { initialSnapshot: ForgeSnapshot }) {
   const { snapshot, hydrate, connectEventStream, runCommand, commandPending, commandError } = useForgeStore();
   useEffect(() => hydrate(initialSnapshot), [hydrate, initialSnapshot]);
-  useEffect(() => connectEventStream(), [connectEventStream]);
+  useEffect(() => connectEventStream(initialSnapshot.forge.slug, initialSnapshot.lastEventSequence), [connectEventStream, initialSnapshot.forge.slug, initialSnapshot.lastEventSequence]);
   const current: ForgeSnapshot = snapshot ?? initialSnapshot;
   const metrics = deriveForgeMetrics(current);
   const blockers = current.operations.filter((operation) => ["blocked", "failed"].includes(operation.status));
@@ -71,7 +71,7 @@ function BlockerBrief({ operation, snapshot }: { operation: Operation; snapshot:
     .filter((title): title is string => Boolean(title));
 
   return (
-    <a href={`/forge/demo/operations?operation=${operation.id}`} className="block rounded border border-amber-400/30 bg-amber-400/10 p-3 hover:border-forge-cyan">
+    <a href={`/forge/${snapshot.forge.slug}/operations?operation=${operation.id}`} className="block rounded border border-amber-400/30 bg-amber-400/10 p-3 hover:border-forge-cyan">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="font-semibold text-amber-100">{operation.title}</div>
@@ -167,7 +167,7 @@ function CompletenessCard({ operation, snapshot }: { operation: Operation; snaps
   const worker = snapshot.workers.find((item) => item.id === operation.workerId);
 
   return (
-    <a href={`/forge/demo/operations?operation=${operation.id}`} className="block rounded border border-forge-line bg-black/25 p-3 hover:border-forge-cyan">
+    <a href={`/forge/${snapshot.forge.slug}/operations?operation=${operation.id}`} className="block rounded border border-forge-line bg-black/25 p-3 hover:border-forge-cyan">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="truncate text-sm font-semibold text-white">{operation.title}</div>
@@ -184,7 +184,7 @@ function CompletenessCard({ operation, snapshot }: { operation: Operation; snaps
 export function OrganizationPage({ initialSnapshot }: { initialSnapshot: ForgeSnapshot }) {
   const { snapshot, hydrate, connectEventStream } = useForgeStore();
   useEffect(() => hydrate(initialSnapshot), [hydrate, initialSnapshot]);
-  useEffect(() => connectEventStream(), [connectEventStream]);
+  useEffect(() => connectEventStream(initialSnapshot.forge.slug, initialSnapshot.lastEventSequence), [connectEventStream, initialSnapshot.forge.slug, initialSnapshot.lastEventSequence]);
   const current: ForgeSnapshot = snapshot ?? initialSnapshot;
   const [selected, setSelected] = useState<{ type: "division" | "worker"; id: string }>({ type: "division", id: current.divisions[0]?.id ?? "" });
   const detail = getOrgDetail(current, selected);
@@ -263,13 +263,11 @@ function OperationsPageFallback({ initialSnapshot }: { initialSnapshot: ForgeSna
 function OperationsPageContent({ initialSnapshot }: { initialSnapshot: ForgeSnapshot }) {
   const { snapshot, hydrate, connectEventStream, runCommand, commandPending, commandError } = useForgeStore();
   useEffect(() => hydrate(initialSnapshot), [hydrate, initialSnapshot]);
-  useEffect(() => connectEventStream(), [connectEventStream]);
+  useEffect(() => connectEventStream(initialSnapshot.forge.slug, initialSnapshot.lastEventSequence), [connectEventStream, initialSnapshot.forge.slug, initialSnapshot.lastEventSequence]);
   const current: ForgeSnapshot = snapshot ?? initialSnapshot;
   const searchParams = useSearchParams();
   const operationParam = searchParams.get("operation");
-  const initialSelectedId = current.operations.some((operation) => operation.id === operationParam)
-    ? operationParam ?? current.operations[0]?.id ?? ""
-    : current.operations[0]?.id ?? "";
+  const initialSelectedId = getPreferredOperationId(current, operationParam);
   const [selectedId, setSelectedId] = useState(initialSelectedId);
   const [query, setQuery] = useState("");
   const [groupBy, setGroupBy] = useState<"status" | "division" | "worker" | "priority">("status");
@@ -288,8 +286,13 @@ function OperationsPageContent({ initialSnapshot }: { initialSnapshot: ForgeSnap
   useEffect(() => {
     if (operationParam && current.operations.some((operation) => operation.id === operationParam)) {
       setSelectedId(operationParam);
+      return;
     }
-  }, [current.operations, operationParam]);
+
+    if (!current.operations.some((operation) => operation.id === selectedId)) {
+      setSelectedId(getPreferredOperationId(current, null));
+    }
+  }, [current, current.operations, operationParam, selectedId]);
 
   return (
     <ForgeShell snapshot={current}>
@@ -358,7 +361,7 @@ function OperationsPageContent({ initialSnapshot }: { initialSnapshot: ForgeSnap
                           selected={selected?.id === operation.id}
                           onSelect={() => {
                             setSelectedId(operation.id);
-                            window.history.replaceState(null, "", `/forge/demo/operations?operation=${operation.id}`);
+                            window.history.replaceState(null, "", `/forge/${current.forge.slug}/operations?operation=${operation.id}`);
                           }}
                         />
                       ))}
@@ -386,12 +389,17 @@ function OperationsPageContent({ initialSnapshot }: { initialSnapshot: ForgeSnap
               ]} />
               <button
                 className="mt-4 flex w-full items-center justify-center gap-2 rounded bg-forge-cyan px-3 py-2 text-sm font-semibold text-black disabled:opacity-60"
-                disabled={commandPending}
+                disabled={commandPending || selected.status !== "ready" || current.forge.status !== "active"}
                 onClick={() => void runCommand({ type: "run_operation", operationId: selected.id })}
               >
                 <Play className="h-4 w-4" />
-                Run Selected Operation
+                {selected.status === "ready" && current.forge.status === "active" ? "Run Selected Operation" : "Select a Ready Operation"}
               </button>
+              {selected.status !== "ready" || current.forge.status !== "active" ? (
+                <div className="mt-3 rounded border border-forge-line bg-black/20 p-3 text-sm text-forge-muted">
+                  Operations can run only when the Forge is active and the selected operation is ready.
+                </div>
+              ) : null}
               {commandError ? <div className="mt-3 rounded border border-red-400/30 bg-red-500/10 p-3 text-sm text-red-100">{commandError}</div> : null}
             </>
           ) : null}
@@ -399,6 +407,14 @@ function OperationsPageContent({ initialSnapshot }: { initialSnapshot: ForgeSnap
       </div>
     </ForgeShell>
   );
+}
+
+function getPreferredOperationId(snapshot: ForgeSnapshot, requestedId: string | null) {
+  if (requestedId && snapshot.operations.some((operation) => operation.id === requestedId)) {
+    return requestedId;
+  }
+
+  return snapshot.operations.find((operation) => operation.status === "ready")?.id ?? snapshot.operations[0]?.id ?? "";
 }
 
 function OperationBoardCard({ operation, selected, onSelect }: { operation: Operation; selected: boolean; onSelect: () => void }) {
@@ -480,38 +496,247 @@ function getOperationGroupLabel(snapshot: ForgeSnapshot, operation: Operation, g
   return `${operation.status[0].toUpperCase()}${operation.status.slice(1)}`;
 }
 
+function RepositoryConnectionPanel({
+  repository,
+  repositoryUrl,
+  owner,
+  repo,
+  defaultBranch,
+  workingBranch,
+  pending,
+  commandError,
+  onRepositoryUrlChange,
+  onOwnerChange,
+  onRepoChange,
+  onDefaultBranchChange,
+  onWorkingBranchChange,
+  onConnect,
+  onRefresh,
+  onDisconnect
+}: {
+  repository: ForgeRepositorySnapshot | null;
+  repositoryUrl: string;
+  owner: string;
+  repo: string;
+  defaultBranch: string;
+  workingBranch: string;
+  pending: boolean;
+  commandError: string | null;
+  onRepositoryUrlChange: (value: string) => void;
+  onOwnerChange: (value: string) => void;
+  onRepoChange: (value: string) => void;
+  onDefaultBranchChange: (value: string) => void;
+  onWorkingBranchChange: (value: string) => void;
+  onConnect: () => void;
+  onRefresh: () => void;
+  onDisconnect: () => void;
+}) {
+  const canConnect = repositoryUrl.trim().length > 0 || (owner.trim().length > 0 && repo.trim().length > 0);
+
+  return (
+    <Panel title="GitHub Repository" action={repository ? "Metadata connected" : "Metadata only"}>
+      <div className="grid gap-4 p-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <div className="space-y-4">
+          {repository ? (
+            <div className="rounded border border-emerald-400/30 bg-emerald-400/10 p-4">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 text-sm uppercase text-emerald-200">
+                    <Github className="h-4 w-4" />
+                    {repository.provider}
+                  </div>
+                  <div className="mt-2 truncate text-2xl font-semibold text-white">
+                    {repository.owner}/{repository.repo}
+                  </div>
+                  <div className="mt-2 grid gap-2 text-sm text-emerald-100 sm:grid-cols-2">
+                    <span>Default: {repository.defaultBranch}</span>
+                    <span>Working: {repository.workingBranch}</span>
+                  </div>
+                </div>
+                <div className="grid gap-2 text-sm text-emerald-100 sm:grid-cols-2 lg:min-w-[280px]">
+                  <div className="rounded border border-emerald-400/20 bg-black/20 p-3">
+                    <div className="text-xs uppercase text-emerald-200">Connected</div>
+                    <div className="mt-1">{formatRepositoryTimestamp(repository.connectedAt)}</div>
+                  </div>
+                  <div className="rounded border border-emerald-400/20 bg-black/20 p-3">
+                    <div className="text-xs uppercase text-emerald-200">Refreshed</div>
+                    <div className="mt-1">{formatRepositoryTimestamp(repository.lastRefreshedAt)}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <EmptyState text="No GitHub repository metadata is connected." />
+          )}
+
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+            <div className="md:col-span-2 xl:col-span-1">
+              <RepositoryInput label="GitHub URL" value={repositoryUrl} placeholder="https://github.com/owner/repo" onChange={onRepositoryUrlChange} />
+            </div>
+            <RepositoryInput label="Owner" value={owner} placeholder="octo-org" onChange={onOwnerChange} />
+            <RepositoryInput label="Repository" value={repo} placeholder="forgeos" onChange={onRepoChange} />
+            <RepositoryInput label="Default Branch" value={defaultBranch} placeholder="main" onChange={onDefaultBranchChange} />
+            <RepositoryInput label="Working Branch" value={workingBranch} placeholder={defaultBranch || "main"} onChange={onWorkingBranchChange} />
+          </div>
+        </div>
+
+        <div className="flex flex-col justify-between gap-3 rounded border border-forge-line bg-black/20 p-4">
+          <div>
+            <div className="text-sm font-semibold text-white">Repository Context</div>
+            <p className="mt-2 text-sm leading-6 text-slate-300">
+              Stores provider, owner, repository, branch, and refresh timestamps on the Forge snapshot.
+            </p>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-3 xl:grid-cols-1">
+            <button
+              className="flex items-center justify-center gap-2 rounded bg-forge-cyan px-3 py-2 text-sm font-semibold text-black disabled:opacity-60"
+              disabled={pending || !canConnect}
+              onClick={onConnect}
+            >
+              <Link className="h-4 w-4" />
+              {repository ? "Update Connection" : "Connect"}
+            </button>
+            <button
+              className="flex items-center justify-center gap-2 rounded border border-forge-line px-3 py-2 text-sm text-slate-200 hover:border-forge-cyan disabled:opacity-60"
+              disabled={pending || !repository}
+              onClick={onRefresh}
+            >
+              <RefreshCw className="h-4 w-4" />
+              Refresh
+            </button>
+            <button
+              className="flex items-center justify-center gap-2 rounded border border-red-400/40 px-3 py-2 text-sm text-red-100 hover:border-red-200 disabled:opacity-60"
+              disabled={pending || !repository}
+              onClick={onDisconnect}
+            >
+              <Unplug className="h-4 w-4" />
+              Disconnect
+            </button>
+          </div>
+          {commandError ? <div className="rounded border border-red-400/30 bg-red-500/10 p-3 text-sm text-red-100">{commandError}</div> : null}
+        </div>
+      </div>
+    </Panel>
+  );
+}
+
+function RepositoryInput({ label, value, placeholder, onChange }: { label: string; value: string; placeholder: string; onChange: (value: string) => void }) {
+  return (
+    <label className="block">
+      <span className="mb-2 block text-xs uppercase text-forge-muted">{label}</span>
+      <input
+        value={value}
+        placeholder={placeholder}
+        onChange={(event) => onChange(event.target.value)}
+        className="w-full rounded border border-forge-line bg-black/30 px-3 py-2 text-sm text-white outline-none focus:border-forge-cyan"
+      />
+    </label>
+  );
+}
+
+function formatRepositoryTimestamp(value: string | undefined) {
+  if (!value) {
+    return "Not recorded";
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return value.slice(0, 19).replace("T", " ");
+}
+
 export function WorkspacePage({ initialSnapshot }: { initialSnapshot: ForgeSnapshot }) {
-  const { snapshot, hydrate, connectEventStream } = useForgeStore();
+  const { snapshot, hydrate, connectEventStream, runCommand, commandPending, commandError } = useForgeStore();
   useEffect(() => hydrate(initialSnapshot), [hydrate, initialSnapshot]);
-  useEffect(() => connectEventStream(), [connectEventStream]);
-  const current: ForgeSnapshot = snapshot ?? initialSnapshot;
+  useEffect(() => connectEventStream(initialSnapshot.forge.slug, initialSnapshot.lastEventSequence), [connectEventStream, initialSnapshot.forge.slug, initialSnapshot.lastEventSequence]);
+  const current = snapshot ?? initialSnapshot;
+  const repository = current.repository ?? null;
   const [selectedId, setSelectedId] = useState(current.files[0]?.id ?? "");
+  const [repositoryUrl, setRepositoryUrl] = useState("");
+  const [owner, setOwner] = useState(repository?.owner ?? "");
+  const [repo, setRepo] = useState(repository?.repo ?? "");
+  const [defaultBranch, setDefaultBranch] = useState(repository?.defaultBranch ?? "main");
+  const [workingBranch, setWorkingBranch] = useState(repository?.workingBranch ?? repository?.defaultBranch ?? "main");
   const selected = current.files.find((file) => file.id === selectedId) ?? current.files[0];
+
+  useEffect(() => {
+    if (!repository) {
+      return;
+    }
+
+    setOwner(repository.owner);
+    setRepo(repository.repo);
+    setDefaultBranch(repository.defaultBranch);
+    setWorkingBranch(repository.workingBranch);
+  }, [repository]);
+
+  async function connectRepository() {
+    const trimmedRepositoryUrl = repositoryUrl.trim();
+    const trimmedOwner = owner.trim();
+    const trimmedRepo = repo.trim();
+    const trimmedDefaultBranch = defaultBranch.trim() || "main";
+    const trimmedWorkingBranch = workingBranch.trim() || trimmedDefaultBranch;
+
+    if (!trimmedRepositoryUrl && (!trimmedOwner || !trimmedRepo)) {
+      return;
+    }
+
+    await runCommand({
+      type: "connect_repository",
+      repositoryUrl: trimmedRepositoryUrl || undefined,
+      owner: trimmedRepositoryUrl ? undefined : trimmedOwner,
+      repo: trimmedRepositoryUrl ? undefined : trimmedRepo,
+      defaultBranch: trimmedDefaultBranch,
+      workingBranch: trimmedWorkingBranch
+    });
+  }
 
   return (
     <ForgeShell snapshot={current}>
-      <div className="grid min-h-[720px] gap-4 xl:grid-cols-[340px_minmax(0,1fr)_360px]">
-        <Panel title="Virtual File Tree" action={`${current.files.length} files`}>
-          <div className="scrollbar max-h-[760px] space-y-2 overflow-auto p-4">
-            {current.files.map((file) => (
-              <button
-                key={file.id}
-                className={`w-full rounded border px-3 py-3 text-left font-mono text-sm hover:border-forge-cyan ${
-                  selected?.id === file.id ? "border-forge-cyan bg-forge-cyan/10 text-white" : "border-forge-line bg-black/20 text-slate-300"
-                }`}
-                onClick={() => setSelectedId(file.id)}
-              >
-                {file.path}
-              </button>
-            ))}
-          </div>
-        </Panel>
-        <Panel title={selected?.path ?? "File Renderer"} action="Read-only virtual workspace">
-          <pre className="scrollbar max-h-[760px] overflow-auto whitespace-pre-wrap p-5 font-mono text-sm leading-6 text-slate-200">{selected?.content}</pre>
-        </Panel>
-        <StickyDetail title="File Metadata" subtitle={selected?.path ?? ""}>
-          {selected ? <FileMetadata file={selected} snapshot={current} /> : <EmptyState text="Select a virtual file." />}
-        </StickyDetail>
+      <div className="space-y-4">
+        <RepositoryConnectionPanel
+          repository={repository}
+          repositoryUrl={repositoryUrl}
+          owner={owner}
+          repo={repo}
+          defaultBranch={defaultBranch}
+          workingBranch={workingBranch}
+          pending={commandPending}
+          commandError={commandError}
+          onRepositoryUrlChange={setRepositoryUrl}
+          onOwnerChange={setOwner}
+          onRepoChange={setRepo}
+          onDefaultBranchChange={setDefaultBranch}
+          onWorkingBranchChange={setWorkingBranch}
+          onConnect={() => void connectRepository()}
+          onRefresh={() => void runCommand({ type: "refresh_repository_context" })}
+          onDisconnect={() => void runCommand({ type: "disconnect_repository" })}
+        />
+        <div className="grid min-h-[720px] gap-4 xl:grid-cols-[340px_minmax(0,1fr)_360px]">
+          <Panel title="Virtual File Tree" action={`${current.files.length} files`}>
+            <div className="scrollbar max-h-[760px] space-y-2 overflow-auto p-4">
+              {current.files.map((file) => (
+                <button
+                  key={file.id}
+                  className={`w-full rounded border px-3 py-3 text-left font-mono text-sm hover:border-forge-cyan ${
+                    selected?.id === file.id ? "border-forge-cyan bg-forge-cyan/10 text-white" : "border-forge-line bg-black/20 text-slate-300"
+                  }`}
+                  onClick={() => setSelectedId(file.id)}
+                >
+                  {file.path}
+                </button>
+              ))}
+            </div>
+          </Panel>
+          <Panel title={selected?.path ?? "File Renderer"} action="Read-only virtual workspace">
+            <pre className="scrollbar max-h-[760px] overflow-auto whitespace-pre-wrap p-5 font-mono text-sm leading-6 text-slate-200">{selected?.content}</pre>
+          </Panel>
+          <StickyDetail title="File Metadata" subtitle={selected?.path ?? ""}>
+            {selected ? <FileMetadata file={selected} snapshot={current} /> : <EmptyState text="Select a virtual file." />}
+          </StickyDetail>
+        </div>
       </div>
     </ForgeShell>
   );
@@ -520,7 +745,7 @@ export function WorkspacePage({ initialSnapshot }: { initialSnapshot: ForgeSnaps
 export function AssetsPage({ initialSnapshot }: { initialSnapshot: ForgeSnapshot }) {
   const { snapshot, hydrate, connectEventStream } = useForgeStore();
   useEffect(() => hydrate(initialSnapshot), [hydrate, initialSnapshot]);
-  useEffect(() => connectEventStream(), [connectEventStream]);
+  useEffect(() => connectEventStream(initialSnapshot.forge.slug, initialSnapshot.lastEventSequence), [connectEventStream, initialSnapshot.forge.slug, initialSnapshot.lastEventSequence]);
   const current: ForgeSnapshot = snapshot ?? initialSnapshot;
   const [selectedId, setSelectedId] = useState(current.artifacts[0]?.id ?? "");
   const selected = current.artifacts.find((artifact) => artifact.id === selectedId) ?? current.artifacts[0];
@@ -555,7 +780,7 @@ export function AssetsPage({ initialSnapshot }: { initialSnapshot: ForgeSnapshot
 export function LogsPage({ initialSnapshot }: { initialSnapshot: ForgeSnapshot }) {
   const { snapshot, hydrate, connectEventStream } = useForgeStore();
   useEffect(() => hydrate(initialSnapshot), [hydrate, initialSnapshot]);
-  useEffect(() => connectEventStream(), [connectEventStream]);
+  useEffect(() => connectEventStream(initialSnapshot.forge.slug, initialSnapshot.lastEventSequence), [connectEventStream, initialSnapshot.forge.slug, initialSnapshot.lastEventSequence]);
   const current: ForgeSnapshot = snapshot ?? initialSnapshot;
   const [selectedId, setSelectedId] = useState(current.events.at(-1)?.id ?? "");
   const selected = current.events.find((event) => event.id === selectedId) ?? current.events.at(-1);

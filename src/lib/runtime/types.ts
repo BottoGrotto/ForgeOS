@@ -18,6 +18,7 @@ export type RuntimeActorType = "operator" | "executive" | "division" | "worker" 
 export type RuntimeTargetType =
   | "forge"
   | "operation"
+  | "repository"
   | "artifact"
   | "worker"
   | "division"
@@ -38,6 +39,9 @@ export type RuntimeEventType =
   | "file.updated"
   | "handoff.created"
   | "chat.message_added"
+  | "repository.connected"
+  | "repository.disconnected"
+  | "repository.refreshed"
   | "runtime.paused"
   | "runtime.resumed"
   | "runtime.reset";
@@ -47,6 +51,9 @@ export type RuntimeCommandType =
   | "start_phase"
   | "run_operation"
   | "run_full_flow"
+  | "connect_repository"
+  | "disconnect_repository"
+  | "refresh_repository_context"
   | "pause_forge"
   | "resume_forge"
   | "shutdown_forge"
@@ -59,6 +66,14 @@ export interface RuntimeCommand {
   operationId?: string;
   phase?: string;
   message?: string;
+  repositoryUrl?: string;
+  provider?: "github";
+  owner?: string;
+  repo?: string;
+  defaultBranch?: string;
+  workingBranch?: string;
+  installationId?: string;
+  accountRef?: string;
   idempotencyKey?: string;
 }
 
@@ -177,6 +192,19 @@ export interface ExecutiveMessage {
   createdAt: string;
 }
 
+export interface ForgeRepositorySnapshot {
+  id: string;
+  provider: "github";
+  owner: string;
+  repo: string;
+  defaultBranch: string;
+  workingBranch: string;
+  installationId?: string;
+  accountRef?: string;
+  connectedAt: string;
+  lastRefreshedAt?: string;
+}
+
 export interface ForgeSnapshot {
   forge: {
     id: string;
@@ -186,6 +214,7 @@ export interface ForgeSnapshot {
     activePhase: string;
     status: "active" | "paused" | "archived";
   };
+  repository?: ForgeRepositorySnapshot;
   lastEventSequence: number;
   schemaVersion: number;
   divisions: Division[];

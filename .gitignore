@@ -4,6 +4,8 @@ coverage
 playwright-report
 test-results
 .playwright-mcp
+.forgeos
+tsconfig.tsbuildinfo
 *.png
 console-errors*.md
 .env

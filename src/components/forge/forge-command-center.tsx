@@ -30,7 +30,7 @@ export function ForgeCommandCenter({ initialSnapshot }: { initialSnapshot: Forge
   useEffect(() => {
     hydrate(initialSnapshot);
   }, [hydrate, initialSnapshot]);
-  useEffect(() => connectEventStream(), [connectEventStream]);
+  useEffect(() => connectEventStream(initialSnapshot.forge.slug, initialSnapshot.lastEventSequence), [connectEventStream, initialSnapshot.forge.slug, initialSnapshot.lastEventSequence]);
 
   const current: ForgeSnapshot = snapshot ?? initialSnapshot;
   const metrics = useMemo(() => deriveForgeMetrics(current), [current]);

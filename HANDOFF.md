@@ -101,49 +101,39 @@ git fetch origin main
 git push -u origin main --force-with-lease
 ```
 
-### 2. Connect GitHub Repositories To Forges
+### 2. GitHub Repository Adapter v1
 
-This is the next product capability requested by the user. A forge should be able to attach to a GitHub repository so agents can inspect project context and eventually produce branches/PRs.
+Metadata-only repository connection now exists: a Forge can store GitHub owner/repo/default branch/working branch metadata, show it on the Workspace page, and emit connect/disconnect/refresh runtime events.
 
-Recommended v1 scope:
+The next GitHub milestone is a read-only adapter, not writes:
 
-- Add a `ForgeRepository` or equivalent model/table.
-- Store repo metadata, not secrets:
-  - provider: `github`
-  - owner
-  - repo
+- Add a `GitHubRepositoryAdapter` behind a repository/workspace boundary.
+- Authenticate through environment variables or GitHub App installation references only.
+- Fetch safe read-only context:
+  - repository existence
   - default branch
-  - selected working branch
-  - installation/account reference for future auth
-- Extend `ForgeSnapshot` so the UI can display connected repository state.
-- Add API commands:
-  - `connect_repository`
-  - `disconnect_repository`
-  - `refresh_repository_context`
-- Add a UI section in the overview or workspace page to connect/display repo status.
-- Keep real GitHub writes out of scope for v1; start read-only.
-- Use GitHub token/app auth via environment variables or GitHub App installation, never hardcoded secrets.
+  - branch list
+  - README/tree metadata
+  - recent refs if useful
+- Keep API responses, snapshots, and runtime events free of secrets.
+- Do not create branches, commits, pull requests, or repository files in this phase.
 
-Success criteria:
+Future write actions must be explicit, auditable runtime commands such as `create_working_branch` or `open_pull_request`, require operator approval, and route through the repository adapter rather than direct UI/runtime side effects.
 
-- A forge can persistently remember its connected GitHub repo.
-- The UI shows connected repo metadata.
-- Runtime events record connect/disconnect/refresh actions.
-- Tests cover validation and persistence.
+### 3. Multi-Forge Instance Support
 
-Recommended implementation order:
+The database schema is mostly multi-Forge-shaped because normalized runtime tables are keyed by `forgeId` and Forge has a unique `slug`, but the app is not yet ready to deploy multiple independent Forge organizations.
 
-1. Add types and Prisma schema/migration for connected repositories.
-2. Add seed data for a demo connected repo only if useful for UI development.
-3. Add command validation and runtime events for connect/disconnect/refresh.
-4. Add repository display/connect form in the UI.
-5. Add tests before implementation:
-   - command validation rejects malformed repo URLs/owners/names
-   - connect persists repo metadata into snapshots
-   - disconnect removes repo metadata
-   - refresh emits a runtime event without writing files
+Remaining work:
 
-### 3. Harden Runtime Command Serialization
+- Replace hard-coded `/forge/demo` routes and nav with dynamic Forge slug routes.
+- Replace `/api/forge/current/*` APIs with Forge-scoped APIs.
+- Make `RuntimeStore` load, dispatch, persist, and stream per `forgeId` or slug instead of a singleton current snapshot.
+- Add Forge create/list/archive/reset flows.
+- Add per-Forge command serialization and idempotency.
+- Add tests proving one Forge's commands/events/repository state cannot affect another Forge.
+
+### 4. Harden Runtime Command Serialization
 
 The runtime has idempotency keys, but command execution is not yet protected by a proper per-forge lock.
 
@@ -154,7 +144,7 @@ Add:
 - worker concurrency enforcement around persisted state
 - tests for concurrent `run_operation` requests
 
-### 4. WorkspaceAdapter v1
+### 5. WorkspaceAdapter v1
 
 Virtual files are still the safe boundary. Formalize write operations before any real workspace sync.
 
@@ -167,7 +157,7 @@ Target interface:
 
 All real filesystem or GitHub repo writes must stay behind a workspace/repository adapter. Agents should not directly read/write arbitrary paths.
 
-### 5. Real Agent Adapter Contracts
+### 6. Real Agent Adapter Contracts
 
 `MockRuntime` is wired through the `AgentRuntime` interface. The placeholder Nemoclaw adapter still needs a concrete boundary before real execution.
 
@@ -183,7 +173,7 @@ Define:
 
 Avoid leaking Nemoclaw-specific assumptions into UI or core schema.
 
-### 6. Improve Runtime Event Streaming
+### 7. Improve Runtime Event Streaming
 
 The SSE endpoint exists and the client refetches snapshots after streamed events. Next improvements:
 
@@ -198,7 +188,8 @@ The SSE endpoint exists and the client refetches snapshots after streamed events
 - Prisma is Postgres-oriented. Without `DATABASE_URL`, the app falls back to in-memory persistence.
 - `npm audit` previously reported moderate transitive vulnerabilities in dev/build tooling; fixes may require breaking upgrades.
 - The Executive Console still uses mock responses only.
-- Real GitHub repo connection is not implemented yet.
+- GitHub repository connection is metadata-only; real GitHub API reads/writes are not implemented yet.
+- Multiple Forge instances are modeled in the database but not fully supported by routes, APIs, or the singleton runtime store yet.
 - Real agent execution is not implemented yet.
 - Safe pause/resume restores prior statuses from the latest `runtime.paused` event payload; if old persisted paused snapshots lack that payload, resume falls back to dependency readiness.
 - `.next`, `.playwright-mcp`, screenshots, and console logs are ignored, but local generated artifacts can still exist from verification runs.

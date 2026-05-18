@@ -1,20 +1,45 @@
 import { z } from "zod";
-import { createDemoSnapshot } from "@/lib/mock/seed";
+import { createForgeSnapshot } from "@/lib/mock/seed";
 import { MockRuntime } from "./mock-runtime";
 import { calculateOperationReadiness } from "./metrics";
-import { InMemoryRuntimePersistence, type RuntimePersistence } from "./persistence";
+import { FileRuntimePersistence, InMemoryRuntimePersistence, type RuntimePersistence } from "./persistence";
 import { PrismaRuntimePersistence } from "./prisma";
 import { projectOrganizationalState, unlockReadyOperations } from "./projector";
 import { getBlockingDependencyIds } from "./scheduler";
 import type { AgentRuntime, ForgeSnapshot, RuntimeCommand, RuntimeEvent, RuntimeEventDraft, RuntimeStatus } from "./types";
 
 const commandSchema = z.object({
-  type: z.enum(["initialize_forge", "start_phase", "run_operation", "run_full_flow", "pause_forge", "resume_forge", "shutdown_forge", "reset_demo_state", "operator_message"]),
+  type: z.enum([
+    "initialize_forge",
+    "start_phase",
+    "run_operation",
+    "run_full_flow",
+    "connect_repository",
+    "disconnect_repository",
+    "refresh_repository_context",
+    "pause_forge",
+    "resume_forge",
+    "shutdown_forge",
+    "reset_demo_state",
+    "operator_message"
+  ]),
   forgeId: z.string().optional(),
   operationId: z.string().optional(),
   phase: z.string().max(80).optional(),
   message: z.string().max(2000).optional(),
+  repositoryUrl: z.string().max(300).optional(),
+  provider: z.literal("github").optional(),
+  owner: z.string().max(80).optional(),
+  repo: z.string().max(120).optional(),
+  defaultBranch: z.string().max(255).optional(),
+  workingBranch: z.string().max(255).optional(),
+  installationId: z.string().max(120).optional(),
+  accountRef: z.string().max(160).optional(),
   idempotencyKey: z.string().max(120).optional()
+});
+
+const createForgeSchema = z.object({
+  name: z.string().trim().min(1).max(80)
 });
 
 export class RuntimeCommandError extends Error {
@@ -25,86 +50,115 @@ export class RuntimeCommandError extends Error {
 }
 
 export class RuntimeStore {
-  private snapshot: ForgeSnapshot | null = null;
-  private loading: Promise<ForgeSnapshot> | null = null;
-
   constructor(
     private readonly persistence: RuntimePersistence = createDefaultPersistence(),
     private readonly agentRuntime: AgentRuntime = new MockRuntime()
   ) {}
 
-  async getSnapshot() {
-    return structuredClone(await this.loadSnapshot());
+  async listForges() {
+    return this.persistence.listForges();
   }
 
-  async getEvents(afterSequence = 0) {
-    const snapshot = await this.loadSnapshot();
+  async createForge(input: unknown) {
+    const { name } = createForgeSchema.parse(input);
+    const slug = slugifyForgeName(name);
+
+    if (!slug) {
+      throw new RuntimeCommandError("Forge name must include letters or numbers.", 400);
+    }
+
+    const existing = await this.persistence.loadSnapshot(slug);
+    if (existing) {
+      throw new RuntimeCommandError("A Forge with this slug already exists.", 409);
+    }
+
+    const snapshot = createForgeSnapshot({
+      id: `forge-${slug}`,
+      slug,
+      name,
+      prefixEntityIds: true
+    });
+
+    await this.persistence.saveSnapshot(snapshot);
+    return {
+      id: snapshot.forge.id,
+      slug: snapshot.forge.slug,
+      name: snapshot.forge.name
+    };
+  }
+
+  async getSnapshot(forgeSlug: string) {
+    return structuredClone(await this.loadSnapshot(forgeSlug));
+  }
+
+  async getEvents(forgeSlug: string, afterSequence = 0) {
+    const snapshot = await this.loadSnapshot(forgeSlug);
     const events = await this.persistence.getEvents(snapshot.forge.id, afterSequence);
     return structuredClone(events);
   }
 
-  async dispatch(input: unknown) {
+  async dispatch(forgeSlug: string, input: unknown) {
     const command = commandSchema.parse(input) as RuntimeCommand;
+    const snapshot = await this.loadSnapshot(forgeSlug);
 
-    if (command.idempotencyKey && (await this.persistence.hasIdempotencyKey(command.idempotencyKey))) {
-      return this.getSnapshot();
+    if (command.idempotencyKey && (await this.persistence.hasIdempotencyKey(snapshot.forge.id, command.idempotencyKey))) {
+      return this.getSnapshot(forgeSlug);
     }
 
-    const nextSnapshot = await this.handleCommand(command);
+    const nextSnapshot = await this.handleCommand(snapshot, command);
 
     if (command.idempotencyKey) {
-      await this.persistence.recordIdempotencyKey(command.idempotencyKey);
+      await this.persistence.recordIdempotencyKey(snapshot.forge.id, command.idempotencyKey);
     }
 
-    this.snapshot = nextSnapshot;
     await this.persistence.saveSnapshot(nextSnapshot);
     return structuredClone(nextSnapshot);
   }
 
-  private async loadSnapshot() {
-    if (this.snapshot) {
-      return this.snapshot;
+  private async loadSnapshot(forgeSlug: string) {
+    const snapshot = await this.persistence.loadSnapshot(forgeSlug);
+    if (!snapshot) {
+      throw new RuntimeCommandError("Forge not found.", 404);
     }
 
-    if (!this.loading) {
-      this.loading = this.persistence.loadSnapshot().then(async (snapshot) => {
-        if (snapshot) {
-          return snapshot;
-        }
-
-        const seeded = createDemoSnapshot();
-        await this.persistence.resetSnapshot(seeded);
-        return seeded;
-      });
-    }
-
-    this.snapshot = await this.loading;
-    return this.snapshot;
+    return snapshot;
   }
 
-  private async handleCommand(command: RuntimeCommand) {
+  private async handleCommand(snapshot: ForgeSnapshot, command: RuntimeCommand) {
     switch (command.type) {
       case "initialize_forge":
       case "reset_demo_state":
-        return this.reset(command.type);
+        return this.reset(snapshot, command.type);
       case "start_phase":
-        return this.startPhase(command.phase ?? "Autonomous Development");
+        return this.startPhase(snapshot, command.phase ?? "Autonomous Development");
       case "run_operation":
-        return this.runOperation(command.operationId);
+        return this.runOperation(snapshot, command.operationId);
       case "run_full_flow":
-        return this.runFullFlow();
+        return this.runFullFlow(snapshot);
+      case "connect_repository":
+        return this.connectRepository(snapshot, command);
+      case "disconnect_repository":
+        return this.disconnectRepository(snapshot);
+      case "refresh_repository_context":
+        return this.refreshRepositoryContext(snapshot);
       case "pause_forge":
       case "shutdown_forge":
-        return this.pauseForge();
+        return this.pauseForge(snapshot);
       case "resume_forge":
-        return this.resumeForge();
+        return this.resumeForge(snapshot);
       case "operator_message":
-        return this.addOperatorMessage(command.message ?? "");
+        return this.addOperatorMessage(snapshot, command.message ?? "");
     }
   }
 
-  private async reset(commandType: "initialize_forge" | "reset_demo_state") {
-    const seeded = createDemoSnapshot();
+  private async reset(current: ForgeSnapshot, commandType: "initialize_forge" | "reset_demo_state") {
+    const seeded = createForgeSnapshot({
+      id: current.forge.id,
+      slug: current.forge.slug,
+      name: current.forge.name,
+      tagline: current.forge.tagline,
+      prefixEntityIds: current.forge.slug !== "demo"
+    });
     const snapshot = appendEvents(seeded, [
       {
         forgeId: seeded.forge.id,
@@ -112,19 +166,17 @@ export class RuntimeStore {
         actorType: "operator",
         targetType: "forge",
         targetId: seeded.forge.id,
-        message: commandType === "reset_demo_state" ? "Demo Forge state reset." : "Forge initialized.",
+        message: commandType === "reset_demo_state" ? "Forge state reset." : "Forge initialized.",
         severity: "success",
         payload: { command: commandType }
       }
     ]);
 
-    this.snapshot = snapshot;
     await this.persistence.resetSnapshot(snapshot);
     return snapshot;
   }
 
-  private async startPhase(phase: string) {
-    const snapshot = await this.loadSnapshot();
+  private async startPhase(snapshot: ForgeSnapshot, phase: string) {
     return appendEvents(
       {
         ...snapshot,
@@ -148,8 +200,7 @@ export class RuntimeStore {
     );
   }
 
-  private async runOperation(operationId?: string) {
-    const snapshot = await this.loadSnapshot();
+  private async runOperation(snapshot: ForgeSnapshot, operationId?: string) {
     const operation = snapshot.operations.find((candidate) => candidate.id === operationId);
 
     if (!operation) {
@@ -207,21 +258,20 @@ export class RuntimeStore {
     return appendEvents(nextSnapshot, [...runtimeEvents, ...unlocked.events]);
   }
 
-  private runFullFlow() {
+  private runFullFlow(snapshot: ForgeSnapshot) {
     const timestamp = new Date().toISOString();
-    return this.loadSnapshot().then((snapshot) => {
       const launchArtifact = {
-        id: `artifact-launch-${Date.now()}`,
+        id: `${snapshot.forge.slug}-artifact-launch-${Date.now()}`,
         title: "Launch Checklist",
         type: "launch_checklist",
-        divisionId: "release",
-        workerId: "release-director",
-        operationId: "op-release",
+        divisionId: snapshot.divisions.find((division) => division.name === "Release Division")?.id ?? "release",
+        workerId: snapshot.workers.find((worker) => worker.name === "Release Director")?.id ?? "release-director",
+        operationId: snapshot.operations.find((operation) => operation.title === "Prepare release pass")?.id ?? "op-release",
         content: "Demo path validated, release assets finalized, and Forge is deployment ready.",
         status: "finalized" as const,
         version: 1,
         tags: ["release", "demo"],
-        fileIds: ["file-qa"],
+        fileIds: snapshot.files.filter((file) => file.path === "review/qa-report.md").map((file) => file.id),
         createdAt: timestamp,
         updatedAt: timestamp
       };
@@ -258,7 +308,7 @@ export class RuntimeStore {
           forgeId: snapshot.forge.id,
           type: "artifact.created",
           actorType: "worker",
-          actorId: "release-director",
+          actorId: launchArtifact.workerId,
           targetType: "artifact",
           targetId: launchArtifact.id,
           message: "Release Division generated the launch checklist.",
@@ -266,11 +316,9 @@ export class RuntimeStore {
           payload: { artifactId: launchArtifact.id }
         }
       ]);
-    });
   }
 
-  private async pauseForge() {
-    const snapshot = await this.loadSnapshot();
+  private async pauseForge(snapshot: ForgeSnapshot) {
     const activeOperationStatuses = new Set(["planning", "ready", "running", "blocked", "reviewing"]);
     const pausedOperationIds = new Set(
       snapshot.operations
@@ -358,8 +406,7 @@ export class RuntimeStore {
     );
   }
 
-  private async resumeForge() {
-    const snapshot = await this.loadSnapshot();
+  private async resumeForge(snapshot: ForgeSnapshot) {
     if (snapshot.forge.status === "active") {
       return snapshot;
     }
@@ -416,8 +463,7 @@ export class RuntimeStore {
     ]);
   }
 
-  private async addOperatorMessage(content: string) {
-    const snapshot = await this.loadSnapshot();
+  private async addOperatorMessage(snapshot: ForgeSnapshot, content: string) {
     const timestamp = new Date().toISOString();
     const operatorMessage = { id: `msg-${Date.now()}-operator`, role: "operator" as const, content, createdAt: timestamp };
     const response = {
@@ -452,6 +498,106 @@ export class RuntimeStore {
           message: "Executive AI response generated by mock provider.",
           severity: "success",
           payload: { messageId: response.id }
+        }
+      ]
+    );
+  }
+
+  private async connectRepository(snapshot: ForgeSnapshot, command: RuntimeCommand) {
+    const normalizedRepository = normalizeRepositoryCommand(command, snapshot.repository?.connectedAt);
+    const repository = {
+      ...normalizedRepository,
+      id: `${snapshot.forge.slug}-${normalizedRepository.id}`
+    };
+
+    return appendEvents(
+      {
+        ...snapshot,
+        repository
+      },
+      [
+        {
+          forgeId: snapshot.forge.id,
+          type: "repository.connected",
+          actorType: "operator",
+          targetType: "repository",
+          targetId: repository.id,
+          message: `GitHub repository connected: ${repository.owner}/${repository.repo}.`,
+          severity: "success",
+          payload: {
+            provider: repository.provider,
+            owner: repository.owner,
+            repo: repository.repo,
+            defaultBranch: repository.defaultBranch,
+            workingBranch: repository.workingBranch
+          }
+        }
+      ]
+    );
+  }
+
+  private async disconnectRepository(snapshot: ForgeSnapshot) {
+    const repository = snapshot.repository;
+    if (!repository) {
+      return snapshot;
+    }
+
+    return appendEvents(
+      {
+        ...snapshot,
+        repository: undefined
+      },
+      [
+        {
+          forgeId: snapshot.forge.id,
+          type: "repository.disconnected",
+          actorType: "operator",
+          targetType: "repository",
+          targetId: repository.id,
+          message: `GitHub repository disconnected: ${repository.owner}/${repository.repo}.`,
+          severity: "warning",
+          payload: {
+            provider: repository.provider,
+            owner: repository.owner,
+            repo: repository.repo
+          }
+        }
+      ]
+    );
+  }
+
+  private async refreshRepositoryContext(snapshot: ForgeSnapshot) {
+    if (!snapshot.repository) {
+      throw new RuntimeCommandError("No repository is connected.", 409);
+    }
+
+    const repository = {
+      ...snapshot.repository,
+      lastRefreshedAt: new Date().toISOString()
+    };
+
+    return appendEvents(
+      {
+        ...snapshot,
+        repository
+      },
+      [
+        {
+          forgeId: snapshot.forge.id,
+          type: "repository.refreshed",
+          actorType: "operator",
+          targetType: "repository",
+          targetId: repository.id,
+          message: `Repository context refreshed for ${repository.owner}/${repository.repo}.`,
+          severity: "info",
+          payload: {
+            provider: repository.provider,
+            owner: repository.owner,
+            repo: repository.repo,
+            defaultBranch: repository.defaultBranch,
+            workingBranch: repository.workingBranch,
+            lastRefreshedAt: repository.lastRefreshedAt
+          }
         }
       ]
     );
@@ -576,12 +722,149 @@ function isPreviousDivisionState(value: unknown): value is { id: string; status:
   return typeof candidate.id === "string" && isRuntimeStatus(candidate.status);
 }
 
+function normalizeRepositoryCommand(command: RuntimeCommand, existingConnectedAt?: string) {
+  const parsed = parseRepositoryLocator(command);
+  const defaultBranch = command.defaultBranch?.trim();
+  if (!defaultBranch) {
+    throw new RuntimeCommandError("Repository default branch is required.", 400);
+  }
+  const workingBranch = command.workingBranch?.trim() || defaultBranch;
+
+  validateOwner(parsed.owner);
+  validateRepo(parsed.repo);
+  validateBranch(defaultBranch, "default branch");
+  validateBranch(workingBranch, "working branch");
+
+  return {
+    id: `repo-${parsed.owner}-${parsed.repo}`.toLowerCase(),
+    provider: "github" as const,
+    owner: parsed.owner,
+    repo: parsed.repo,
+    defaultBranch,
+    workingBranch,
+    installationId: command.installationId?.trim() || undefined,
+    accountRef: command.accountRef?.trim() || undefined,
+    connectedAt: existingConnectedAt ?? new Date().toISOString()
+  };
+}
+
+function parseRepositoryLocator(command: RuntimeCommand) {
+  if (command.repositoryUrl) {
+    const parsed = parseGitHubRepositoryUrl(command.repositoryUrl);
+    if (command.owner || command.repo) {
+      const explicitOwner = command.owner?.trim();
+      const explicitRepo = command.repo ? stripGitSuffix(command.repo.trim()) : undefined;
+      if (explicitOwner !== parsed.owner || explicitRepo !== parsed.repo) {
+        throw new RuntimeCommandError("Repository URL and owner/repo fields do not match.", 400);
+      }
+    }
+    return parsed;
+  }
+
+  if (!command.owner || !command.repo) {
+    throw new RuntimeCommandError("Repository owner and name are required.", 400);
+  }
+
+  return {
+    owner: command.owner.trim(),
+    repo: stripGitSuffix(command.repo.trim())
+  };
+}
+
+function parseGitHubRepositoryUrl(repositoryUrl: string) {
+  const trimmed = repositoryUrl.trim();
+  if (trimmed.startsWith("git@")) {
+    throw new RuntimeCommandError("Repository URL must use https://github.com.", 400);
+  }
+
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    throw new RuntimeCommandError("Repository URL must be a valid GitHub URL.", 400);
+  }
+
+  if (url.hostname.toLowerCase() !== "github.com") {
+    throw new RuntimeCommandError("Only GitHub repository URLs are supported.", 400);
+  }
+
+  if (url.protocol !== "https:") {
+    throw new RuntimeCommandError("Repository URL must use https://github.com.", 400);
+  }
+
+  if (url.username || url.password || url.search || url.hash) {
+    throw new RuntimeCommandError("Repository URL must not include credentials, query strings, or fragments.", 400);
+  }
+
+  const parts = url.pathname.split("/").filter(Boolean);
+  if (parts.length !== 2) {
+    throw new RuntimeCommandError("GitHub repository URL must include owner and repository name.", 400);
+  }
+
+  return {
+    owner: parts[0],
+    repo: stripGitSuffix(parts[1])
+  };
+}
+
+function stripGitSuffix(value: string) {
+  return value.endsWith(".git") ? value.slice(0, -4) : value;
+}
+
+function validateOwner(owner: string) {
+  if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(owner)) {
+    throw new RuntimeCommandError("Invalid GitHub repository owner.", 400);
+  }
+}
+
+function validateRepo(repo: string) {
+  if (!/^[A-Za-z0-9._-]{1,100}$/.test(repo) || repo === "." || repo === "..") {
+    throw new RuntimeCommandError("Invalid GitHub repository name.", 400);
+  }
+}
+
+function validateBranch(branch: string, label: string) {
+  if (
+    branch.length === 0 ||
+    branch.length > 255 ||
+    branch.startsWith("/") ||
+    branch.endsWith("/") ||
+    branch.includes("..") ||
+    branch.includes("//") ||
+    branch.includes("@{") ||
+    branch.includes("\\") ||
+    branch.endsWith(".lock") ||
+    /\s/.test(branch) ||
+    /[\u0000-\u001f\u007f~^:?*[{]/.test(branch)
+  ) {
+    throw new RuntimeCommandError(`Invalid ${label}.`, 400);
+  }
+}
+
+export function slugifyForgeName(name: string) {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
 function createDefaultPersistence(): RuntimePersistence {
   if (process.env.DATABASE_URL) {
     return new PrismaRuntimePersistence();
   }
 
-  return new InMemoryRuntimePersistence(createDemoSnapshot());
+  if (process.env.NODE_ENV === "test") {
+    return new InMemoryRuntimePersistence();
+  }
+
+  return new FileRuntimePersistence(process.env.FORGEOS_RUNTIME_STORE_PATH);
 }
 
-export const runtimeStore = new RuntimeStore();
+const globalForRuntime = globalThis as unknown as { forgeRuntimeStore?: RuntimeStore };
+
+export const runtimeStore = globalForRuntime.forgeRuntimeStore ?? new RuntimeStore();
+
+if (process.env.NODE_ENV !== "production") {
+  globalForRuntime.forgeRuntimeStore = runtimeStore;
+}

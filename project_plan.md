@@ -783,7 +783,71 @@ Seed realistic files:
 \- pitch/presentation-outline.md  
 \- review/qa-report.md
 
-\==================================================  
+\==================================================
+GITHUB REPOSITORY INTEGRATION
+\==================================================
+
+ForgeOS should support connecting each Forge to a GitHub repository so workers can inspect project context and, eventually, create branches and pull requests.
+
+The integration must progress in strict safety phases:
+
+Phase 1 — Metadata-only connection:
+\- store provider, owner, repo, default branch, selected working branch, and refresh timestamps
+\- show connected repository state in the Forge workspace
+\- emit runtime events for connect, disconnect, and refresh
+\- do not call GitHub APIs
+\- do not clone repositories
+\- do not create branches, commits, or pull requests
+\- do not store tokens, personal access tokens, private keys, or secrets
+
+Phase 2 — Read-only GitHub adapter:
+\- introduce a `GitHubRepositoryAdapter` behind a repository/workspace boundary
+\- authenticate through environment variables or GitHub App installation references only
+\- verify that a repository exists
+\- fetch default branch and branch list
+\- fetch lightweight repository context such as README, tree metadata, and recent refs
+\- keep all operations read-only
+\- keep API responses and runtime events free of secrets
+
+Phase 3 — Controlled write actions:
+\- add explicit runtime commands for external side effects, such as creating a working branch or opening a pull request
+\- require operator approval before any remote write
+\- route all GitHub writes through the repository adapter, never directly from UI components or core runtime projection logic
+\- record stable runtime events for branch creation, commit proposals, and pull request creation
+\- make failures recoverable and idempotent
+
+GitHub read/write behavior must never bypass the adapter boundary. Real repository writes are external actions and must be treated as explicit, auditable operations rather than automatic side effects of worker execution.
+
+\==================================================
+MULTI-FORGE INSTANCE ORCHESTRATION
+\==================================================
+
+The product vision requires deploying and operating multiple Forge instances, where each Forge represents a separate autonomous organization with its own repository, workers, operations, artifacts, memory, logs, and runtime state.
+
+Target behavior:
+\- create multiple Forges from templates
+\- route UI pages by Forge slug or ID instead of a single demo Forge
+\- route API commands, snapshots, events, workspace files, and repository actions by Forge
+\- keep runtime state isolated per Forge
+\- support different connected repositories per Forge
+\- support multiple active autonomous organizations without shared singleton state
+\- provide a Forge switcher or Forge index for operators
+
+Implementation requirements:
+\- replace hard-coded `/forge/demo` assumptions with dynamic Forge routes
+\- replace `/api/forge/current/*` with Forge-scoped APIs
+\- make `RuntimeStore` load, dispatch, persist, and stream by `forgeId` or slug
+\- enforce per-Forge command serialization and idempotency
+\- preserve normalized `forgeId` ownership across operations, workers, artifacts, files, handoffs, events, snapshots, messages, and repository metadata
+\- add Forge creation, listing, archive, and reset flows
+\- add tests proving that commands and events for one Forge cannot affect another Forge
+
+Current state:
+\- the Prisma schema is mostly multi-Forge-shaped because normalized runtime tables are keyed by `forgeId` and Forge has a unique slug
+\- the application is not yet fully multi-Forge-ready because routes, navigation, snapshot APIs, event streams, and the runtime store still behave as a single current/demo Forge
+\- multi-Forge deployment is therefore a next architecture milestone, not a completed capability
+
+\==================================================
 ARTIFACT SYSTEM  
 \==================================================
 

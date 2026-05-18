@@ -1,6 +1,6 @@
 import { Prisma, PrismaClient } from "@prisma/client";
 import type { ForgeSnapshot, RuntimeEvent } from "./types";
-import type { RuntimePersistence } from "./persistence";
+import type { ForgeSummary, RuntimePersistence } from "./persistence";
 
 const globalForPrisma = globalThis as unknown as { forgePrisma?: PrismaClient };
 
@@ -46,12 +46,35 @@ export class PrismaEventStore {
 export class PrismaSnapshotStore {
   constructor(private readonly client: PrismaClient) {}
 
-  async loadActiveSnapshot(): Promise<ForgeSnapshot | null> {
+  async listActiveForges(): Promise<ForgeSummary[]> {
+    return this.client.forge.findMany({
+      where: {
+        status: {
+          not: "archived"
+        }
+      },
+      orderBy: {
+        name: "asc"
+      },
+      select: {
+        id: true,
+        slug: true,
+        name: true,
+        tagline: true,
+        status: true,
+        activePhase: true
+      }
+    });
+  }
+
+  async loadActiveSnapshot(forgeSlug: string): Promise<ForgeSnapshot | null> {
     const snapshot = await this.client.forgeSnapshot.findFirst({
       where: {
         forge: {
-          slug: "demo",
-          status: "active"
+          slug: forgeSlug,
+          status: {
+            not: "archived"
+          }
         }
       },
       orderBy: {
@@ -118,8 +141,12 @@ export class PrismaRuntimePersistence implements RuntimePersistence {
     this.snapshots = new PrismaSnapshotStore(client);
   }
 
-  async loadSnapshot() {
-    return this.snapshots.loadActiveSnapshot();
+  async listForges() {
+    return this.snapshots.listActiveForges();
+  }
+
+  async loadSnapshot(forgeSlug: string) {
+    return this.snapshots.loadActiveSnapshot(forgeSlug);
   }
 
   async saveSnapshot(snapshot: ForgeSnapshot) {
@@ -127,7 +154,13 @@ export class PrismaRuntimePersistence implements RuntimePersistence {
   }
 
   async resetSnapshot(snapshot: ForgeSnapshot) {
-    await this.client.runtimeCommandLedger.deleteMany();
+    await this.client.runtimeCommandLedger.deleteMany({
+      where: {
+        key: {
+          startsWith: `${snapshot.forge.id}:`
+        }
+      }
+    });
     await this.snapshots.replaceSnapshot(snapshot);
   }
 
@@ -135,20 +168,20 @@ export class PrismaRuntimePersistence implements RuntimePersistence {
     return this.events.getEvents(forgeId, afterSequence);
   }
 
-  async hasIdempotencyKey(key: string) {
+  async hasIdempotencyKey(forgeId: string, key: string) {
     const record = await this.client.runtimeCommandLedger.findUnique({
       where: {
-        key
+        key: scopedKey(forgeId, key)
       }
     });
 
     return Boolean(record);
   }
 
-  async recordIdempotencyKey(key: string) {
+  async recordIdempotencyKey(forgeId: string, key: string) {
     await this.client.runtimeCommandLedger.create({
       data: {
-        key
+        key: scopedKey(forgeId, key)
       }
     });
   }
@@ -226,6 +259,22 @@ async function writeSnapshot(tx: TransactionClient, snapshot: ForgeSnapshot) {
           operationId: file.operationId
         }))
       },
+      repository: snapshot.repository
+        ? {
+            create: {
+              id: snapshot.repository.id,
+              provider: snapshot.repository.provider,
+              owner: snapshot.repository.owner,
+              repo: snapshot.repository.repo,
+              defaultBranch: snapshot.repository.defaultBranch,
+              workingBranch: snapshot.repository.workingBranch,
+              installationId: snapshot.repository.installationId,
+              accountRef: snapshot.repository.accountRef,
+              connectedAt: snapshot.repository.connectedAt,
+              lastRefreshedAt: snapshot.repository.lastRefreshedAt
+            }
+          }
+        : undefined,
       handoffs: {
         create: snapshot.handoffs.map((handoff) => ({
           id: handoff.id,
@@ -298,4 +347,8 @@ async function writeSnapshot(tx: TransactionClient, snapshot: ForgeSnapshot) {
 
 function toJson(value: unknown): Prisma.InputJsonValue {
   return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
+}
+
+function scopedKey(forgeId: string, key: string) {
+  return `${forgeId}:${key}`;
 }

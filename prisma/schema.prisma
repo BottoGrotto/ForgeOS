@@ -58,6 +58,7 @@ enum RuntimeActorType {
 enum RuntimeTargetType {
   forge
   operation
+  repository
   artifact
   worker
   division
@@ -87,10 +88,30 @@ model Forge {
   operations     Operation[]
   artifacts      Artifact[]
   virtualFiles   VirtualFile[]
+  repository     ForgeRepository?
   handoffs       Handoff[]
   events         RuntimeEvent[]
   snapshots      ForgeSnapshot[]
   messages       ExecutiveMessage[]
+}
+
+model ForgeRepository {
+  id              String   @id @default(cuid())
+  forgeId         String   @unique
+  forge           Forge    @relation(fields: [forgeId], references: [id], onDelete: Cascade)
+  provider        String
+  owner           String
+  repo            String
+  defaultBranch   String
+  workingBranch   String
+  installationId  String?
+  accountRef      String?
+  connectedAt     DateTime
+  lastRefreshedAt DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([provider, owner, repo])
 }
 
 model Division {
