@@ -133,6 +133,7 @@ export class PrismaSnapshotStore {
 }
 
 export class PrismaRuntimePersistence implements RuntimePersistence {
+  readonly mode = "database" as const;
   private readonly events: PrismaEventStore;
   private readonly snapshots: PrismaSnapshotStore;
 

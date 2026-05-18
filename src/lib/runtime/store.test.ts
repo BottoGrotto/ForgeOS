@@ -59,6 +59,17 @@ describe("runtimeStore", () => {
     expect(alphaSnapshot.repository).toBeDefined();
   });
 
+  it("rejects local storage clearing when persistence is not file backed", async () => {
+    const runtimeStore = new RuntimeStore(new InMemoryRuntimePersistence());
+    await runtimeStore.createForge({ name: "Memory Forge" });
+
+    await expect(runtimeStore.clearLocalForges()).rejects.toMatchObject({
+      status: 403,
+      message: "Local Forge storage reset is available only with file-backed development storage."
+    });
+    await expect(runtimeStore.listForges()).resolves.toHaveLength(1);
+  });
+
   it("appends ordered events and refreshes snapshot after a runtime command", async () => {
     const runtimeStore = createTestStore();
     await runtimeStore.dispatch("demo", { type: "reset_demo_state", idempotencyKey: "test-reset" });

@@ -4,5 +4,5 @@ import { runtimeStore } from "@/lib/runtime/store";
 export const dynamic = "force-dynamic";
 
 export default async function ForgesPage() {
-  return <ForgesIndex forges={await runtimeStore.listForges()} />;
+  return <ForgesIndex forges={await runtimeStore.listForges()} storageInfo={runtimeStore.getStorageInfo()} />;
 }

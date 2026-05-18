@@ -42,6 +42,24 @@ describe("FileRuntimePersistence", () => {
     const loaded = await new RuntimeStore(new FileRuntimePersistence(filePath)).getSnapshot(forge.slug);
     expect(loaded.forge.name).toBe("Concurrent Forge");
   });
+
+  it("clears cached and persisted local Forge state", async () => {
+    const filePath = await createTempStorePath();
+    const firstStore = new RuntimeStore(new FileRuntimePersistence(filePath));
+    const first = await firstStore.createForge({ name: "Clearable First" });
+    await firstStore.createForge({ name: "Clearable Second" });
+    await firstStore.dispatch(first.slug, { type: "operator_message", message: "Persist me", idempotencyKey: "cleared-key" });
+
+    await firstStore.clearLocalForges();
+
+    const secondStore = new RuntimeStore(new FileRuntimePersistence(filePath));
+    const recreated = await secondStore.createForge({ name: "Clearable First" });
+    const snapshot = await secondStore.dispatch(recreated.slug, { type: "operator_message", message: "Persist me", idempotencyKey: "cleared-key" });
+
+    expect(await firstStore.listForges()).toEqual([]);
+    expect(snapshot.forge.slug).toBe(first.slug);
+    expect(snapshot.messages.filter((message) => message.content === "Persist me")).toHaveLength(1);
+  });
 });
 
 async function createTempStorePath() {

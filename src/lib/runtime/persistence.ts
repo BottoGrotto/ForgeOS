@@ -13,6 +13,7 @@ export interface ForgeSummary {
 }
 
 export interface RuntimePersistence {
+  readonly mode: "memory" | "file" | "database";
   listForges(): Promise<ForgeSummary[]>;
   loadSnapshot(forgeSlug: string): Promise<ForgeSnapshot | null>;
   saveSnapshot(snapshot: ForgeSnapshot): Promise<void>;
@@ -20,9 +21,11 @@ export interface RuntimePersistence {
   getEvents(forgeId: string, afterSequence: number): Promise<RuntimeEvent[]>;
   hasIdempotencyKey(forgeId: string, key: string): Promise<boolean>;
   recordIdempotencyKey(forgeId: string, key: string): Promise<void>;
+  clear?(): Promise<void>;
 }
 
 export class InMemoryRuntimePersistence implements RuntimePersistence {
+  readonly mode = "memory" as const;
   private readonly snapshots = new Map<string, ForgeSnapshot>();
   private readonly appliedKeys = new Set<string>();
 
@@ -76,6 +79,11 @@ export class InMemoryRuntimePersistence implements RuntimePersistence {
   async recordIdempotencyKey(forgeId: string, key: string) {
     this.appliedKeys.add(scopedKey(forgeId, key));
   }
+
+  async clear() {
+    this.snapshots.clear();
+    this.appliedKeys.clear();
+  }
 }
 
 interface FileRuntimePersistencePayload {
@@ -84,6 +92,7 @@ interface FileRuntimePersistencePayload {
 }
 
 export class FileRuntimePersistence implements RuntimePersistence {
+  readonly mode = "file" as const;
   private loaded = false;
   private readonly snapshots = new Map<string, ForgeSnapshot>();
   private readonly appliedKeys = new Set<string>();
@@ -143,6 +152,13 @@ export class FileRuntimePersistence implements RuntimePersistence {
   async recordIdempotencyKey(forgeId: string, key: string) {
     await this.ensureLoaded();
     this.appliedKeys.add(scopedKey(forgeId, key));
+    await this.persist();
+  }
+
+  async clear() {
+    await this.ensureLoaded();
+    this.snapshots.clear();
+    this.appliedKeys.clear();
     await this.persist();
   }
 

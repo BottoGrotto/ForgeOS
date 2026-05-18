@@ -55,8 +55,27 @@ export class RuntimeStore {
     private readonly agentRuntime: AgentRuntime = new MockRuntime()
   ) {}
 
+  getStorageInfo() {
+    const resettable = this.persistence.mode === "file" && process.env.NODE_ENV !== "production" && !process.env.DATABASE_URL && Boolean(this.persistence.clear);
+
+    return {
+      mode: this.persistence.mode,
+      resettable,
+      visible: process.env.NODE_ENV !== "production"
+    };
+  }
+
   async listForges() {
     return this.persistence.listForges();
+  }
+
+  async clearLocalForges() {
+    const storage = this.getStorageInfo();
+    if (!storage.resettable || !this.persistence.clear) {
+      throw new RuntimeCommandError("Local Forge storage reset is available only with file-backed development storage.", 403);
+    }
+
+    await this.persistence.clear();
   }
 
   async createForge(input: unknown) {

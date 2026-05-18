@@ -119,3 +119,23 @@ test("operator can return to the Forge index and switch Forge instances", async 
   await Promise.all([waitForRuntimeCommand(), page.getByRole("button", { name: /Run Flow/ }).click()]);
   await expect(page.getByText("Deployment Ready").first()).toBeVisible();
 });
+
+test("operator can clear file-backed local Forge state in development", async ({ page }) => {
+  const forgeName = `Clear Local ${Date.now()}`;
+
+  await page.goto("/forges");
+  await page.getByPlaceholder("New Forge name").fill(forgeName);
+  await page.getByRole("button", { name: "Create Forge" }).click();
+  await page.getByRole("link", { name: "Forges" }).click();
+  await expect(page.getByRole("link", { name: new RegExp(forgeName) })).toBeVisible();
+  await expect(page.getByText("File-backed local runtime")).toBeVisible();
+
+  await page.getByRole("button", { name: "Clear Local State" }).click();
+  const dialog = page.getByRole("dialog", { name: "Clear Local Forge State" });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "Clear Local State" }).click();
+
+  await expect(dialog).toBeHidden();
+  await expect(page).toHaveURL(/\/forges$/);
+  await expect(page.getByText("No Forge instances exist yet.")).toBeVisible();
+});
