@@ -1,5 +1,13 @@
 import { expect, test } from "@playwright/test";
 
+async function login(page: import("@playwright/test").Page) {
+  await page.goto("/forges");
+  await expect(page).toHaveURL(/\/login/);
+  await page.getByLabel("Operator Password").fill("e2e-password");
+  await page.getByRole("button", { name: "Enter ForgeOS" }).click();
+  await expect(page).toHaveURL(/\/forges$/);
+}
+
 test("operator can run the ForgeOS demo flow", async ({ page }) => {
   const waitForRuntimeCommand = async () => {
     const response = await page.waitForResponse((candidate) => /\/api\/forges\/[^/]+\/commands/.test(candidate.url()));
@@ -9,7 +17,7 @@ test("operator can run the ForgeOS demo flow", async ({ page }) => {
   const forgeName = `E2E Forge ${Date.now()}`;
   const forgeSlug = forgeName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 
-  await page.goto("/forges");
+  await login(page);
   await page.getByPlaceholder("New Forge name").fill(forgeName);
   await page.getByRole("button", { name: "Create Forge" }).click();
   await expect(page).toHaveURL(new RegExp(`/forge/${forgeSlug}$`));
@@ -82,11 +90,12 @@ test("operator can run the ForgeOS demo flow", async ({ page }) => {
 });
 
 test("/forge/demo is not a compatibility route", async ({ page }) => {
+  await login(page);
   const response = await page.goto("/forge/demo");
   expect(response?.status()).toBe(404);
 });
 
-test("operator can return to the Forge index and switch Forge instances", async ({ page, request }) => {
+test("operator can return to the Forge index and switch Forge instances", async ({ page }) => {
   const waitForRuntimeCommand = async () => {
     const response = await page.waitForResponse((candidate) => /\/api\/forges\/[^/]+\/commands/.test(candidate.url()));
     expect(response.status()).toBe(200);
@@ -96,7 +105,7 @@ test("operator can return to the Forge index and switch Forge instances", async 
   const secondName = `Switcher Second ${Date.now()}`;
   const firstSlug = firstName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 
-  await page.goto("/forges");
+  await login(page);
   await page.getByPlaceholder("New Forge name").fill(firstName);
   await page.getByRole("button", { name: "Create Forge" }).click();
   await expect(page).toHaveURL(new RegExp(`/forge/${firstSlug}$`));
@@ -106,7 +115,7 @@ test("operator can return to the Forge index and switch Forge instances", async 
   await expect(page).toHaveURL(/\/forges$/);
   await page.getByRole("link", { name: new RegExp(firstName) }).click();
 
-  const response = await request.post("/api/forges", { data: { name: secondName } });
+  const response = await page.request.post("/api/forges", { data: { name: secondName } });
   expect(response.status()).toBe(201);
   const payload = (await response.json()) as { data: { forge: { slug: string } } };
 
@@ -123,7 +132,7 @@ test("operator can return to the Forge index and switch Forge instances", async 
 test("operator can clear file-backed local Forge state in development", async ({ page }) => {
   const forgeName = `Clear Local ${Date.now()}`;
 
-  await page.goto("/forges");
+  await login(page);
   await page.getByPlaceholder("New Forge name").fill(forgeName);
   await page.getByRole("button", { name: "Create Forge" }).click();
   await page.getByRole("link", { name: "Forges" }).click();
