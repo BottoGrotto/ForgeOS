@@ -1,6 +1,6 @@
 import { Prisma, PrismaClient } from "@prisma/client";
 import type { ForgeSnapshot, RuntimeEvent } from "./types";
-import type { ForgeSummary, RuntimePersistence } from "./persistence";
+import type { ForgeSummary, GitHubOAuthConnection, RuntimePersistence } from "./persistence";
 
 const globalForPrisma = globalThis as unknown as { forgePrisma?: PrismaClient };
 
@@ -185,6 +185,49 @@ export class PrismaRuntimePersistence implements RuntimePersistence {
         key: scopedKey(forgeId, key)
       }
     });
+  }
+
+  async loadGitHubConnection(forgeId: string): Promise<GitHubOAuthConnection | null> {
+    const connection = await this.client.gitHubOAuthConnection.findUnique({ where: { forgeId } });
+    return connection
+      ? {
+          forgeId: connection.forgeId,
+          accountLogin: connection.accountLogin,
+          accountId: connection.accountId,
+          scopes: connection.scopes,
+          tokenType: connection.tokenType,
+          encryptedAccessToken: connection.encryptedAccessToken,
+          connectedAt: connection.connectedAt.toISOString(),
+          updatedAt: connection.updatedAt.toISOString()
+        }
+      : null;
+  }
+
+  async saveGitHubConnection(connection: GitHubOAuthConnection) {
+    await this.client.gitHubOAuthConnection.upsert({
+      where: { forgeId: connection.forgeId },
+      update: {
+        accountLogin: connection.accountLogin,
+        accountId: connection.accountId,
+        scopes: connection.scopes,
+        tokenType: connection.tokenType,
+        encryptedAccessToken: connection.encryptedAccessToken,
+        connectedAt: new Date(connection.connectedAt)
+      },
+      create: {
+        forgeId: connection.forgeId,
+        accountLogin: connection.accountLogin,
+        accountId: connection.accountId,
+        scopes: connection.scopes,
+        tokenType: connection.tokenType,
+        encryptedAccessToken: connection.encryptedAccessToken,
+        connectedAt: new Date(connection.connectedAt)
+      }
+    });
+  }
+
+  async deleteGitHubConnection(forgeId: string) {
+    await this.client.gitHubOAuthConnection.deleteMany({ where: { forgeId } });
   }
 }
 

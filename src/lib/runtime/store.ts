@@ -1,5 +1,7 @@
 import { z } from "zod";
+import { listGitHubRepositories, syncGitHubRepositoryFiles, type GitHubRepositorySummary } from "@/lib/github/client";
 import { createForgeSnapshot } from "@/lib/mock/seed";
+import { decryptSecret } from "@/lib/security/tokens";
 import { MockRuntime } from "./mock-runtime";
 import { calculateOperationReadiness } from "./metrics";
 import { FileRuntimePersistence, InMemoryRuntimePersistence, type RuntimePersistence } from "./persistence";
@@ -17,6 +19,7 @@ const commandSchema = z.object({
     "connect_repository",
     "disconnect_repository",
     "refresh_repository_context",
+    "sync_repository",
     "pause_forge",
     "resume_forge",
     "shutdown_forge",
@@ -33,6 +36,7 @@ const commandSchema = z.object({
   repo: z.string().max(120).optional(),
   defaultBranch: z.string().max(255).optional(),
   workingBranch: z.string().max(255).optional(),
+  ref: z.string().max(255).optional(),
   installationId: z.string().max(120).optional(),
   accountRef: z.string().max(160).optional(),
   idempotencyKey: z.string().max(120).optional()
@@ -76,6 +80,75 @@ export class RuntimeStore {
     }
 
     await this.persistence.clear();
+  }
+
+  async connectGitHubAccount(forgeSlug: string, input: { accountLogin: string; accountId: string; scopes: string[]; tokenType: string; encryptedAccessToken: string }) {
+    const snapshot = await this.loadSnapshot(forgeSlug);
+    const timestamp = new Date().toISOString();
+    await this.persistence.saveGitHubConnection({
+      forgeId: snapshot.forge.id,
+      accountLogin: input.accountLogin,
+      accountId: input.accountId,
+      scopes: input.scopes,
+      tokenType: input.tokenType,
+      encryptedAccessToken: input.encryptedAccessToken,
+      connectedAt: timestamp,
+      updatedAt: timestamp
+    });
+    const repository = snapshot.repository
+      ? {
+          ...snapshot.repository,
+          authenticatedAccountLogin: input.accountLogin
+        }
+      : undefined;
+    const nextSnapshot = appendEvents({ ...snapshot, repository }, [
+      {
+        forgeId: snapshot.forge.id,
+        type: "github.connected",
+        actorType: "operator",
+        targetType: "repository",
+        targetId: snapshot.repository?.id,
+        message: `GitHub account ${input.accountLogin} connected.`,
+        severity: "success",
+        payload: { accountLogin: input.accountLogin, scopes: input.scopes }
+      }
+    ]);
+    await this.persistence.saveSnapshot(nextSnapshot);
+    return {
+      accountLogin: input.accountLogin,
+      scopes: input.scopes,
+      connectedAt: timestamp
+    };
+  }
+
+  async getGitHubAccount(forgeSlug: string) {
+    const snapshot = await this.loadSnapshot(forgeSlug);
+    const connection = await this.persistence.loadGitHubConnection(snapshot.forge.id);
+    return connection
+      ? {
+          accountLogin: connection.accountLogin,
+          accountId: connection.accountId,
+          scopes: connection.scopes,
+          connectedAt: connection.connectedAt,
+          updatedAt: connection.updatedAt
+        }
+      : null;
+  }
+
+  async listGitHubRepositories(forgeSlug: string): Promise<GitHubRepositorySummary[]> {
+    const accessToken = await this.getGitHubAccessToken(forgeSlug);
+    return listGitHubRepositories(accessToken);
+  }
+
+  async syncGitHubRepository(forgeSlug: string, input: { owner: string; repo: string; ref?: string; idempotencyKey?: string }) {
+    return this.dispatch(forgeSlug, {
+      type: "sync_repository",
+      owner: input.owner,
+      repo: input.repo,
+      ref: input.ref,
+      workingBranch: input.ref,
+      idempotencyKey: input.idempotencyKey
+    });
   }
 
   async createForge(input: unknown) {
@@ -143,6 +216,20 @@ export class RuntimeStore {
     return snapshot;
   }
 
+  private async getGitHubAccessToken(forgeSlug: string) {
+    const snapshot = await this.loadSnapshot(forgeSlug);
+    const connection = await this.persistence.loadGitHubConnection(snapshot.forge.id);
+    if (!connection) {
+      throw new RuntimeCommandError("GitHub account is not connected.", 401);
+    }
+
+    try {
+      return decryptSecret(connection.encryptedAccessToken);
+    } catch {
+      throw new RuntimeCommandError("GitHub token could not be decrypted.", 500);
+    }
+  }
+
   private async handleCommand(snapshot: ForgeSnapshot, command: RuntimeCommand) {
     switch (command.type) {
       case "initialize_forge":
@@ -160,6 +247,8 @@ export class RuntimeStore {
         return this.disconnectRepository(snapshot);
       case "refresh_repository_context":
         return this.refreshRepositoryContext(snapshot);
+      case "sync_repository":
+        return this.syncRepository(snapshot, command);
       case "pause_forge":
       case "shutdown_forge":
         return this.pauseForge(snapshot);
@@ -560,6 +649,7 @@ export class RuntimeStore {
     if (!repository) {
       return snapshot;
     }
+    await this.persistence.deleteGitHubConnection(snapshot.forge.id);
 
     return appendEvents(
       {
@@ -622,6 +712,66 @@ export class RuntimeStore {
     );
   }
 
+  private async syncRepository(snapshot: ForgeSnapshot, command: RuntimeCommand) {
+    const owner = command.owner?.trim() || snapshot.repository?.owner;
+    const repo = command.repo?.trim() || snapshot.repository?.repo;
+    const ref = command.ref?.trim() || command.workingBranch?.trim() || snapshot.repository?.workingBranch || snapshot.repository?.defaultBranch || "main";
+    if (!owner || !repo) {
+      throw new RuntimeCommandError("Repository owner and name are required.", 400);
+    }
+
+    const accessToken = await this.getGitHubAccessToken(snapshot.forge.slug);
+    const startedAt = new Date().toISOString();
+    const syncedFiles = await syncGitHubRepositoryFiles(accessToken, { owner, repo, ref });
+    const completedAt = new Date().toISOString();
+    const repository = {
+      id: snapshot.repository?.id ?? `${snapshot.forge.slug}-repo-github-${owner}-${repo}`.toLowerCase(),
+      provider: "github" as const,
+      owner,
+      repo,
+      defaultBranch: snapshot.repository?.defaultBranch ?? ref,
+      workingBranch: ref,
+      connectedAt: snapshot.repository?.connectedAt ?? startedAt,
+      lastRefreshedAt: completedAt,
+      syncStatus: "completed" as const,
+      lastSyncStartedAt: startedAt,
+      lastSyncCompletedAt: completedAt,
+      syncedFileCount: syncedFiles.length,
+      authenticatedAccountLogin: (await this.getGitHubAccount(snapshot.forge.slug))?.accountLogin
+    };
+    const existingSyncedFileIds = new Set(snapshot.files.filter((file) => file.id.startsWith(`${snapshot.forge.slug}-github-file-`)).map((file) => file.id));
+    const retainedFiles = snapshot.files.filter((file) => !existingSyncedFileIds.has(file.id));
+    const repoFiles = syncedFiles.map((file) => ({
+      id: `${snapshot.forge.slug}-github-file-${stableIdForPath(file.path)}`,
+      path: `repo/${file.path}`,
+      content: file.content,
+      status: "generated" as const,
+      version: 1,
+      artifactIds: [],
+      updatedAt: completedAt
+    }));
+
+    return appendEvents(
+      {
+        ...snapshot,
+        repository,
+        files: [...retainedFiles, ...repoFiles]
+      },
+      [
+        {
+          forgeId: snapshot.forge.id,
+          type: "repository.synced",
+          actorType: "operator",
+          targetType: "repository",
+          targetId: repository.id,
+          message: `Synced ${syncedFiles.length} files from ${owner}/${repo}.`,
+          severity: "success",
+          payload: { owner, repo, ref, fileCount: syncedFiles.length }
+        }
+      ]
+    );
+  }
+
   private assertOperationCanRun(snapshot: ForgeSnapshot, operationId: string) {
     if (snapshot.forge.status === "paused") {
       throw new RuntimeCommandError("Forge is paused and is not accepting operation runs.", 409);
@@ -670,6 +820,10 @@ function appendEvents(snapshot: ForgeSnapshot, drafts: RuntimeEventDraft[]): For
     events: [...snapshot.events, ...events],
     lastEventSequence: snapshot.lastEventSequence + events.length
   };
+}
+
+function stableIdForPath(filePath: string) {
+  return filePath.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80) || "root";
 }
 
 function getLatestPauseState(snapshot: ForgeSnapshot) {

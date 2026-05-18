@@ -89,6 +89,7 @@ model Forge {
   artifacts      Artifact[]
   virtualFiles   VirtualFile[]
   repository     ForgeRepository?
+  githubConnection GitHubOAuthConnection?
   handoffs       Handoff[]
   events         RuntimeEvent[]
   snapshots      ForgeSnapshot[]
@@ -112,6 +113,21 @@ model ForgeRepository {
   updatedAt       DateTime @updatedAt
 
   @@index([provider, owner, repo])
+}
+
+model GitHubOAuthConnection {
+  id                   String   @id @default(cuid())
+  forgeId              String   @unique
+  forge                Forge    @relation(fields: [forgeId], references: [id], onDelete: Cascade)
+  accountLogin         String
+  accountId            String
+  scopes               String[]
+  tokenType            String
+  encryptedAccessToken String
+  connectedAt          DateTime
+  updatedAt            DateTime @updatedAt
+
+  @@index([accountLogin])
 }
 
 model Division {

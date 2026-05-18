@@ -497,13 +497,17 @@ function getOperationGroupLabel(snapshot: ForgeSnapshot, operation: Operation, g
 }
 
 function RepositoryConnectionPanel({
+  forgeSlug,
   repository,
+  githubAccount,
+  githubRepositories,
   repositoryUrl,
   owner,
   repo,
   defaultBranch,
   workingBranch,
   pending,
+  githubPending,
   commandError,
   onRepositoryUrlChange,
   onOwnerChange,
@@ -511,16 +515,22 @@ function RepositoryConnectionPanel({
   onDefaultBranchChange,
   onWorkingBranchChange,
   onConnect,
+  onLoadGitHubRepositories,
+  onSyncGitHubRepository,
   onRefresh,
   onDisconnect
 }: {
+  forgeSlug: string;
   repository: ForgeRepositorySnapshot | null;
+  githubAccount: { accountLogin: string; scopes: string[] } | null;
+  githubRepositories: Array<{ owner: string; name: string; fullName: string; defaultBranch: string; private: boolean }>;
   repositoryUrl: string;
   owner: string;
   repo: string;
   defaultBranch: string;
   workingBranch: string;
   pending: boolean;
+  githubPending: boolean;
   commandError: string | null;
   onRepositoryUrlChange: (value: string) => void;
   onOwnerChange: (value: string) => void;
@@ -528,6 +538,8 @@ function RepositoryConnectionPanel({
   onDefaultBranchChange: (value: string) => void;
   onWorkingBranchChange: (value: string) => void;
   onConnect: () => void;
+  onLoadGitHubRepositories: () => void;
+  onSyncGitHubRepository: (repository: { owner: string; name: string; defaultBranch: string }) => void;
   onRefresh: () => void;
   onDisconnect: () => void;
 }) {
@@ -569,6 +581,46 @@ function RepositoryConnectionPanel({
             <EmptyState text="No GitHub repository metadata is connected." />
           )}
 
+          <div className="rounded border border-forge-line bg-black/20 p-4">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <div className="text-sm font-semibold text-white">GitHub Account</div>
+                <div className="mt-1 text-sm text-forge-muted">
+                  {githubAccount ? `Connected as ${githubAccount.accountLogin}` : "OAuth required before syncing private repositories."}
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <a href={`/api/github/oauth/start?forgeSlug=${encodeURIComponent(forgeSlug)}`} className="flex items-center justify-center gap-2 rounded border border-forge-line px-3 py-2 text-sm text-slate-200 hover:border-forge-cyan">
+                  <Github className="h-4 w-4" />
+                  {githubAccount ? "Reconnect GitHub" : "Connect GitHub"}
+                </a>
+                <button
+                  className="flex items-center justify-center gap-2 rounded border border-forge-line px-3 py-2 text-sm text-slate-200 hover:border-forge-cyan disabled:opacity-60"
+                  disabled={!githubAccount || githubPending}
+                  onClick={onLoadGitHubRepositories}
+                >
+                  <RefreshCw className="h-4 w-4" />
+                  Load Repositories
+                </button>
+              </div>
+            </div>
+            {githubRepositories.length > 0 ? (
+              <div className="mt-4 grid gap-2 md:grid-cols-2">
+                {githubRepositories.slice(0, 8).map((item) => (
+                  <button
+                    key={item.fullName}
+                    className="rounded border border-forge-line bg-black/20 p-3 text-left hover:border-forge-cyan disabled:opacity-60"
+                    disabled={githubPending}
+                    onClick={() => onSyncGitHubRepository({ owner: item.owner, name: item.name, defaultBranch: item.defaultBranch })}
+                  >
+                    <div className="truncate text-sm font-semibold text-white">{item.fullName}</div>
+                    <div className="mt-1 text-xs uppercase text-forge-muted">{item.private ? "private" : "public"} / {item.defaultBranch}</div>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
             <div className="md:col-span-2 xl:col-span-1">
               <RepositoryInput label="GitHub URL" value={repositoryUrl} placeholder="https://github.com/owner/repo" onChange={onRepositoryUrlChange} />
@@ -599,10 +651,10 @@ function RepositoryConnectionPanel({
             <button
               className="flex items-center justify-center gap-2 rounded border border-forge-line px-3 py-2 text-sm text-slate-200 hover:border-forge-cyan disabled:opacity-60"
               disabled={pending || !repository}
-              onClick={onRefresh}
+              onClick={githubAccount ? () => onSyncGitHubRepository({ owner, name: repo, defaultBranch: workingBranch || defaultBranch }) : onRefresh}
             >
               <RefreshCw className="h-4 w-4" />
-              Refresh
+              {githubAccount ? "Sync Repository" : "Refresh"}
             </button>
             <button
               className="flex items-center justify-center gap-2 rounded border border-red-400/40 px-3 py-2 text-sm text-red-100 hover:border-red-200 disabled:opacity-60"
@@ -659,6 +711,9 @@ export function WorkspacePage({ initialSnapshot }: { initialSnapshot: ForgeSnaps
   const [repo, setRepo] = useState(repository?.repo ?? "");
   const [defaultBranch, setDefaultBranch] = useState(repository?.defaultBranch ?? "main");
   const [workingBranch, setWorkingBranch] = useState(repository?.workingBranch ?? repository?.defaultBranch ?? "main");
+  const [githubAccount, setGithubAccount] = useState<{ accountLogin: string; scopes: string[] } | null>(null);
+  const [githubRepositories, setGithubRepositories] = useState<Array<{ owner: string; name: string; fullName: string; defaultBranch: string; private: boolean }>>([]);
+  const [githubPending, setGithubPending] = useState(false);
   const selected = current.files.find((file) => file.id === selectedId) ?? current.files[0];
 
   useEffect(() => {
@@ -671,6 +726,21 @@ export function WorkspacePage({ initialSnapshot }: { initialSnapshot: ForgeSnaps
     setDefaultBranch(repository.defaultBranch);
     setWorkingBranch(repository.workingBranch);
   }, [repository]);
+
+  useEffect(() => {
+    let active = true;
+    async function loadAccount() {
+      const response = await fetch(`/api/forges/${current.forge.slug}/github/account`, { cache: "no-store" });
+      const payload = (await response.json()) as { success: boolean; data?: { account: { accountLogin: string; scopes: string[] } | null } };
+      if (active && payload.success) {
+        setGithubAccount(payload.data?.account ?? null);
+      }
+    }
+    void loadAccount();
+    return () => {
+      active = false;
+    };
+  }, [current.forge.slug]);
 
   async function connectRepository() {
     const trimmedRepositoryUrl = repositoryUrl.trim();
@@ -693,17 +763,51 @@ export function WorkspacePage({ initialSnapshot }: { initialSnapshot: ForgeSnaps
     });
   }
 
+  async function loadGitHubRepositories() {
+    setGithubPending(true);
+    try {
+      const response = await fetch(`/api/forges/${current.forge.slug}/github/repositories`, { cache: "no-store" });
+      const payload = (await response.json()) as { success: boolean; data?: { repositories: Array<{ owner: string; name: string; fullName: string; defaultBranch: string; private: boolean }> } };
+      if (payload.success && payload.data) {
+        setGithubRepositories(payload.data.repositories);
+      }
+    } finally {
+      setGithubPending(false);
+    }
+  }
+
+  async function syncGitHubRepository(item: { owner: string; name: string; defaultBranch: string }) {
+    setGithubPending(true);
+    try {
+      const response = await fetch(`/api/forges/${current.forge.slug}/github/sync`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ owner: item.owner, repo: item.name, ref: item.defaultBranch, idempotencyKey: `sync-${item.owner}-${item.name}-${Date.now()}` })
+      });
+      const payload = (await response.json()) as { success: boolean; data?: ForgeSnapshot };
+      if (payload.success && payload.data) {
+        hydrate(payload.data);
+      }
+    } finally {
+      setGithubPending(false);
+    }
+  }
+
   return (
     <ForgeShell snapshot={current}>
       <div className="space-y-4">
         <RepositoryConnectionPanel
+          forgeSlug={current.forge.slug}
           repository={repository}
+          githubAccount={githubAccount}
+          githubRepositories={githubRepositories}
           repositoryUrl={repositoryUrl}
           owner={owner}
           repo={repo}
           defaultBranch={defaultBranch}
           workingBranch={workingBranch}
           pending={commandPending}
+          githubPending={githubPending}
           commandError={commandError}
           onRepositoryUrlChange={setRepositoryUrl}
           onOwnerChange={setOwner}
@@ -711,6 +815,8 @@ export function WorkspacePage({ initialSnapshot }: { initialSnapshot: ForgeSnaps
           onDefaultBranchChange={setDefaultBranch}
           onWorkingBranchChange={setWorkingBranch}
           onConnect={() => void connectRepository()}
+          onLoadGitHubRepositories={() => void loadGitHubRepositories()}
+          onSyncGitHubRepository={(item) => void syncGitHubRepository(item)}
           onRefresh={() => void runCommand({ type: "refresh_repository_context" })}
           onDisconnect={() => void runCommand({ type: "disconnect_repository" })}
         />

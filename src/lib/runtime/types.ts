@@ -42,6 +42,9 @@ export type RuntimeEventType =
   | "repository.connected"
   | "repository.disconnected"
   | "repository.refreshed"
+  | "repository.synced"
+  | "github.connected"
+  | "github.disconnected"
   | "runtime.paused"
   | "runtime.resumed"
   | "runtime.reset";
@@ -54,6 +57,7 @@ export type RuntimeCommandType =
   | "connect_repository"
   | "disconnect_repository"
   | "refresh_repository_context"
+  | "sync_repository"
   | "pause_forge"
   | "resume_forge"
   | "shutdown_forge"
@@ -72,6 +76,7 @@ export interface RuntimeCommand {
   repo?: string;
   defaultBranch?: string;
   workingBranch?: string;
+  ref?: string;
   installationId?: string;
   accountRef?: string;
   idempotencyKey?: string;
@@ -203,6 +208,12 @@ export interface ForgeRepositorySnapshot {
   accountRef?: string;
   connectedAt: string;
   lastRefreshedAt?: string;
+  syncStatus?: "idle" | "syncing" | "completed" | "failed";
+  syncError?: string;
+  lastSyncStartedAt?: string;
+  lastSyncCompletedAt?: string;
+  syncedFileCount?: number;
+  authenticatedAccountLogin?: string;
 }
 
 export interface ForgeSnapshot {

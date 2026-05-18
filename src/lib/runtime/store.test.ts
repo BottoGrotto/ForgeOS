@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDemoSnapshot } from "@/lib/mock/seed";
+import { encryptSecret } from "@/lib/security/tokens";
 import { RuntimeCommandError, RuntimeStore } from "./store";
 import { InMemoryRuntimePersistence } from "./persistence";
 
@@ -7,7 +8,18 @@ function createTestStore() {
   return new RuntimeStore(new InMemoryRuntimePersistence(createDemoSnapshot()));
 }
 
+const originalTokenSecret = process.env.FORGEOS_TOKEN_SECRET;
+
 describe("runtimeStore", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (originalTokenSecret) {
+      process.env.FORGEOS_TOKEN_SECRET = originalTokenSecret;
+    } else {
+      delete process.env.FORGEOS_TOKEN_SECRET;
+    }
+  });
+
   it("creates isolated Forges from names with generated slugs", async () => {
     const runtimeStore = new RuntimeStore(new InMemoryRuntimePersistence());
 
@@ -68,6 +80,32 @@ describe("runtimeStore", () => {
       message: "Local Forge storage reset is available only with file-backed development storage."
     });
     await expect(runtimeStore.listForges()).resolves.toHaveLength(1);
+  });
+
+  it("stores GitHub OAuth tokens outside snapshots and syncs repository files per Forge", async () => {
+    process.env.FORGEOS_TOKEN_SECRET = "test-secret";
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify({ tree: [{ path: "README.md", type: "blob", size: 10 }] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response("# Synced\n", { status: 200 }));
+    const runtimeStore = new RuntimeStore(new InMemoryRuntimePersistence());
+    const alpha = await runtimeStore.createForge({ name: "GitHub Alpha" });
+    const beta = await runtimeStore.createForge({ name: "GitHub Beta" });
+
+    await runtimeStore.connectGitHubAccount(alpha.slug, {
+      accountLogin: "octocat",
+      accountId: "123",
+      scopes: ["repo", "read:user"],
+      tokenType: "bearer",
+      encryptedAccessToken: encryptSecret("gho_secret")
+    });
+    const snapshot = await runtimeStore.syncGitHubRepository(alpha.slug, { owner: "BottoGrotto", repo: "ForgeOS", ref: "main" });
+    const betaSnapshot = await runtimeStore.getSnapshot(beta.slug);
+
+    expect(snapshot.repository).toMatchObject({ owner: "BottoGrotto", repo: "ForgeOS", syncStatus: "completed", syncedFileCount: 1 });
+    expect(snapshot.files.find((file) => file.path === "repo/README.md")?.content).toBe("# Synced\n");
+    expect(JSON.stringify(snapshot)).not.toContain("gho_secret");
+    expect(betaSnapshot.repository).toBeUndefined();
+    expect(betaSnapshot.files.some((file) => file.path === "repo/README.md")).toBe(false);
   });
 
   it("appends ordered events and refreshes snapshot after a runtime command", async () => {

@@ -12,6 +12,17 @@ export interface ForgeSummary {
   activePhase: string;
 }
 
+export interface GitHubOAuthConnection {
+  forgeId: string;
+  accountLogin: string;
+  accountId: string;
+  scopes: string[];
+  tokenType: string;
+  encryptedAccessToken: string;
+  connectedAt: string;
+  updatedAt: string;
+}
+
 export interface RuntimePersistence {
   readonly mode: "memory" | "file" | "database";
   listForges(): Promise<ForgeSummary[]>;
@@ -21,6 +32,9 @@ export interface RuntimePersistence {
   getEvents(forgeId: string, afterSequence: number): Promise<RuntimeEvent[]>;
   hasIdempotencyKey(forgeId: string, key: string): Promise<boolean>;
   recordIdempotencyKey(forgeId: string, key: string): Promise<void>;
+  loadGitHubConnection(forgeId: string): Promise<GitHubOAuthConnection | null>;
+  saveGitHubConnection(connection: GitHubOAuthConnection): Promise<void>;
+  deleteGitHubConnection(forgeId: string): Promise<void>;
   clear?(): Promise<void>;
 }
 
@@ -80,15 +94,32 @@ export class InMemoryRuntimePersistence implements RuntimePersistence {
     this.appliedKeys.add(scopedKey(forgeId, key));
   }
 
+  private readonly githubConnections = new Map<string, GitHubOAuthConnection>();
+
+  async loadGitHubConnection(forgeId: string) {
+    const connection = this.githubConnections.get(forgeId);
+    return connection ? structuredClone(connection) : null;
+  }
+
+  async saveGitHubConnection(connection: GitHubOAuthConnection) {
+    this.githubConnections.set(connection.forgeId, structuredClone(connection));
+  }
+
+  async deleteGitHubConnection(forgeId: string) {
+    this.githubConnections.delete(forgeId);
+  }
+
   async clear() {
     this.snapshots.clear();
     this.appliedKeys.clear();
+    this.githubConnections.clear();
   }
 }
 
 interface FileRuntimePersistencePayload {
   snapshots: ForgeSnapshot[];
   appliedKeys: string[];
+  githubConnections?: GitHubOAuthConnection[];
 }
 
 export class FileRuntimePersistence implements RuntimePersistence {
@@ -96,6 +127,7 @@ export class FileRuntimePersistence implements RuntimePersistence {
   private loaded = false;
   private readonly snapshots = new Map<string, ForgeSnapshot>();
   private readonly appliedKeys = new Set<string>();
+  private readonly githubConnections = new Map<string, GitHubOAuthConnection>();
   private writeQueue = Promise.resolve();
 
   constructor(private readonly filePath = path.join(process.cwd(), ".forgeos", "runtime-store.json")) {}
@@ -155,10 +187,29 @@ export class FileRuntimePersistence implements RuntimePersistence {
     await this.persist();
   }
 
+  async loadGitHubConnection(forgeId: string) {
+    await this.ensureLoaded();
+    const connection = this.githubConnections.get(forgeId);
+    return connection ? structuredClone(connection) : null;
+  }
+
+  async saveGitHubConnection(connection: GitHubOAuthConnection) {
+    await this.ensureLoaded();
+    this.githubConnections.set(connection.forgeId, structuredClone(connection));
+    await this.persist();
+  }
+
+  async deleteGitHubConnection(forgeId: string) {
+    await this.ensureLoaded();
+    this.githubConnections.delete(forgeId);
+    await this.persist();
+  }
+
   async clear() {
     await this.ensureLoaded();
     this.snapshots.clear();
     this.appliedKeys.clear();
+    this.githubConnections.clear();
     await this.persist();
   }
 
@@ -179,6 +230,11 @@ export class FileRuntimePersistence implements RuntimePersistence {
           this.appliedKeys.add(key);
         }
       }
+      for (const connection of payload.githubConnections ?? []) {
+        if (isGitHubOAuthConnection(connection)) {
+          this.githubConnections.set(connection.forgeId, structuredClone(connection));
+        }
+      }
     } catch (error) {
       if (!isFileNotFoundError(error)) {
         throw error;
@@ -191,7 +247,8 @@ export class FileRuntimePersistence implements RuntimePersistence {
   private async persist() {
     const payload: FileRuntimePersistencePayload = {
       snapshots: Array.from(this.snapshots.values()),
-      appliedKeys: Array.from(this.appliedKeys)
+      appliedKeys: Array.from(this.appliedKeys),
+      githubConnections: Array.from(this.githubConnections.values())
     };
 
     const write = async () => {
@@ -227,4 +284,20 @@ function isForgeSnapshot(value: unknown): value is ForgeSnapshot {
 
 function isFileNotFoundError(error: unknown) {
   return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
+}
+
+function isGitHubOAuthConnection(value: unknown): value is GitHubOAuthConnection {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as Partial<GitHubOAuthConnection>;
+  return (
+    typeof candidate.forgeId === "string" &&
+    typeof candidate.accountLogin === "string" &&
+    typeof candidate.accountId === "string" &&
+    Array.isArray(candidate.scopes) &&
+    typeof candidate.tokenType === "string" &&
+    typeof candidate.encryptedAccessToken === "string"
+  );
 }
