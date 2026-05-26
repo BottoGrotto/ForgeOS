@@ -1,11 +1,15 @@
 import { NextRequest } from "next/server";
 import { RuntimeCommandError, runtimeStore } from "@/lib/runtime/store";
 import type { RuntimeEvent } from "@/lib/runtime/types";
-import { apiError } from "@/lib/security/request";
+import { apiError, getAuthenticatedOperatorSession } from "@/lib/security/request";
 
 const encoder = new TextEncoder();
 
 export async function GET(request: NextRequest, context: { params: Promise<{ forgeSlug: string }> }) {
+  if (!getAuthenticatedOperatorSession(request)) {
+    return apiError("Authentication required", 401);
+  }
+
   const { forgeSlug } = await context.params;
   const afterSequence = Number(request.nextUrl.searchParams.get("afterSequence") ?? "0");
   const once = request.nextUrl.searchParams.get("once") === "1";
@@ -31,8 +35,14 @@ export async function GET(request: NextRequest, context: { params: Promise<{ for
         }
       };
 
-      await sendEvents();
-      send(": heartbeat\n\n");
+      try {
+        await sendEvents();
+        send(": heartbeat\n\n");
+      } catch (error) {
+        send(formatErrorEvent(error));
+        controller.close();
+        return;
+      }
 
       if (once) {
         controller.close();
@@ -44,8 +54,13 @@ export async function GET(request: NextRequest, context: { params: Promise<{ for
         if (request.signal.aborted) {
           break;
         }
-        await sendEvents();
-        send(": heartbeat\n\n");
+        try {
+          await sendEvents();
+          send(": heartbeat\n\n");
+        } catch (error) {
+          send(formatErrorEvent(error));
+          break;
+        }
       }
 
       controller.close();
@@ -55,7 +70,9 @@ export async function GET(request: NextRequest, context: { params: Promise<{ for
   return new Response(stream, {
     headers: {
       "content-type": "text/event-stream; charset=utf-8",
-      "cache-control": "no-cache, no-transform",
+      "cache-control": "private, no-store, no-transform",
+      pragma: "no-cache",
+      vary: "Cookie",
       connection: "keep-alive",
       "x-accel-buffering": "no"
     }
@@ -64,6 +81,13 @@ export async function GET(request: NextRequest, context: { params: Promise<{ for
 
 function formatEvent(event: RuntimeEvent) {
   return `event: runtime.event\ndata: ${JSON.stringify(event)}\n\n`;
+}
+
+function formatErrorEvent(error: unknown) {
+  if (error instanceof RuntimeCommandError) {
+    return `event: runtime.error\ndata: ${JSON.stringify({ message: error.message, status: error.status })}\n\n`;
+  }
+  return `event: runtime.error\ndata: ${JSON.stringify({ message: "Event stream failed", status: 500 })}\n\n`;
 }
 
 function wait(ms: number) {

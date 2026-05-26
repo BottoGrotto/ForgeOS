@@ -1,11 +1,11 @@
 "use client";
 
 import { FormEvent, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { Lock } from "lucide-react";
+import { sanitizeNextPath } from "@/lib/auth/redirect";
 
 export function LoginForm() {
-  const router = useRouter();
   const searchParams = useSearchParams();
   const [password, setPassword] = useState("");
   const [pending, setPending] = useState(false);
@@ -13,13 +13,14 @@ export function LoginForm() {
 
   async function login(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const submittedPassword = event.currentTarget.elements.namedItem("password");
     setPending(true);
     setError(null);
     try {
       const response = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ password })
+        body: JSON.stringify({ password: submittedPassword instanceof HTMLInputElement ? submittedPassword.value : password })
       });
       const payload = (await response.json()) as { success: boolean; error?: string };
       if (!payload.success) {
@@ -27,9 +28,7 @@ export function LoginForm() {
         return;
       }
 
-      const next = searchParams.get("next");
-      router.replace(next?.startsWith("/") ? next : "/forges");
-      router.refresh();
+      window.location.assign(sanitizeNextPath(searchParams.get("next")));
     } catch {
       setError("Login failed.");
     } finally {
@@ -43,6 +42,7 @@ export function LoginForm() {
         <span className="mb-2 block text-xs uppercase text-forge-muted">Operator Password</span>
         <input
           type="password"
+          name="password"
           value={password}
           onChange={(event) => setPassword(event.target.value)}
           className="w-full rounded border border-forge-line bg-black/30 px-3 py-2 text-sm text-white outline-none focus:border-forge-cyan"

@@ -30,7 +30,8 @@ export class PlaceholderNemoclawAdapter implements NemoclawAdapter {
       supportsCancel: true,
       supportsResume: true,
       supportsRetries: true,
-      supportsWorkspaceRefs: true
+      supportsWorkspaceRefs: true,
+      supportsWebSearch: false
     };
   }
 

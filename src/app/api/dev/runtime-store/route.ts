@@ -19,6 +19,6 @@ export async function DELETE(request: NextRequest) {
     if (error instanceof RuntimeCommandError) {
       return apiError(error.message, error.status);
     }
-    return apiError("Local Forge storage reset failed", 500);
+    return apiError("Development Forge storage reset failed", 500);
   }
 }

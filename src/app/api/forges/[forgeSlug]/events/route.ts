@@ -1,8 +1,12 @@
 import { NextRequest } from "next/server";
 import { RuntimeCommandError, runtimeStore } from "@/lib/runtime/store";
-import { apiError, apiJson } from "@/lib/security/request";
+import { apiError, apiJson, getAuthenticatedOperatorSession } from "@/lib/security/request";
 
 export async function GET(request: NextRequest, context: { params: Promise<{ forgeSlug: string }> }) {
+  if (!getAuthenticatedOperatorSession(request)) {
+    return apiError("Authentication required", 401);
+  }
+
   const { forgeSlug } = await context.params;
   const afterSequence = Number(request.nextUrl.searchParams.get("afterSequence") ?? "0");
   try {

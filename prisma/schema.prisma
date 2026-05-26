@@ -24,6 +24,7 @@ enum RuntimeStatus {
   completed
   failed
   canceled
+  archived
 }
 
 enum OperationPriority {
@@ -58,6 +59,7 @@ enum RuntimeActorType {
 enum RuntimeTargetType {
   forge
   operation
+  run
   repository
   artifact
   worker
@@ -86,6 +88,7 @@ model Forge {
   divisions      Division[]
   workers        Worker[]
   operations     Operation[]
+  runs           AgentRun[]
   artifacts      Artifact[]
   virtualFiles   VirtualFile[]
   repository     ForgeRepository?
@@ -189,6 +192,7 @@ model Operation {
   completedAt    DateTime?
   failedAt       DateTime?
   outputs        Artifact[]
+  runs           AgentRun[]
   dependencyOf   OperationDependency[] @relation("OperationDependencyOf")
   dependsOn      OperationDependency[] @relation("OperationDependsOn")
   createdAt      DateTime          @default(now())
@@ -196,6 +200,52 @@ model Operation {
 
   @@index([forgeId, status])
   @@index([forgeId, divisionId])
+}
+
+model AgentRun {
+  id               String        @id @default(cuid())
+  forgeId          String
+  forge            Forge         @relation(fields: [forgeId], references: [id], onDelete: Cascade)
+  operationId      String
+  operation        Operation     @relation(fields: [operationId], references: [id], onDelete: Cascade)
+  workerId         String?
+  provider         String
+  externalRunId    String?
+  status           String
+  capabilities     Json
+  usage            Json?
+  rateLimit        Json?
+  providerMetadata Json
+  error            String?
+  queuedAt         DateTime
+  startedAt        DateTime?
+  completedAt      DateTime?
+  failedAt         DateTime?
+  canceledAt       DateTime?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  @@index([forgeId, status])
+  @@index([forgeId, operationId])
+  @@index([provider, externalRunId])
+}
+
+model AgentRunClaim {
+  id             String   @id @default(cuid())
+  forgeId        String
+  runId          String   @unique
+  operationId    String
+  workerId       String?
+  provider       String
+  claimedBy      String
+  leaseExpiresAt DateTime
+  heartbeatAt    DateTime @default(now())
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([forgeId, operationId])
+  @@unique([forgeId, workerId])
+  @@index([forgeId, leaseExpiresAt])
 }
 
 model OperationDependency {

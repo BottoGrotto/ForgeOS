@@ -154,7 +154,7 @@ function OrgMap({ snapshot, selected, onSelect }: { snapshot: ForgeSnapshot; sel
 
 function OperationsBoard({ snapshot, selected, onSelect }: { snapshot: ForgeSnapshot; selected: Selection | null; onSelect: (selection: Selection) => void }) {
   const active = snapshot.operations.filter((operation) => ["running", "ready", "blocked", "reviewing", "planning"].includes(operation.status));
-  const handoff = snapshot.handoffs[0];
+  const handoff = snapshot.handoffs.slice().sort((left, right) => right.createdAt.localeCompare(left.createdAt) || left.id.localeCompare(right.id))[0];
 
   return (
     <div className="flex h-full min-h-[520px] flex-col">
@@ -276,10 +276,11 @@ function ExecutiveConsole({
 }: {
   snapshot: ForgeSnapshot;
   pending: boolean;
-  onCommand: (command: { type: "run_full_flow" | "pause_forge" | "resume_forge" | "reset_demo_state" | "run_operation" | "operator_message"; message?: string }) => Promise<void>;
+  onCommand: (command: { type: "run_full_flow" | "run_bounded_cycle" | "pause_forge" | "resume_forge" | "reset_demo_state" | "run_operation" | "operator_message"; message?: string; maxRuns?: number }) => Promise<void>;
 }) {
   const [message, setMessage] = useState("");
-  const recent = snapshot.messages.slice(-5);
+  const summaries = snapshot.messages.filter((item) => item.kind === "executive_summary").slice(-2).reverse();
+  const recent = snapshot.messages.filter((item) => item.kind !== "executive_summary").slice(-5);
 
   async function submit() {
     const trimmed = message.trim();
@@ -295,6 +296,12 @@ function ExecutiveConsole({
       <PanelTitle icon={MessageSquare} title="Executive Console" action="Mock LLM" />
       <div className="scrollbar h-[185px] overflow-auto px-4 py-3">
         <div className="space-y-3">
+          {summaries.map((item) => (
+            <div key={item.id} className="rounded border border-emerald-400/30 bg-emerald-500/10 p-3 text-sm">
+              <div className="mb-1 text-xs uppercase text-emerald-200">summary {item.status ? `· ${item.status}` : ""}</div>
+              <div className="leading-6 text-slate-200">{item.content}</div>
+            </div>
+          ))}
           {recent.map((item) => (
             <div key={item.id} className={`rounded border border-forge-line p-3 text-sm ${item.role === "executive" ? "bg-forge-cyan/10" : "bg-black/20"}`}>
               <div className="mb-1 text-xs uppercase text-forge-muted">{item.role}</div>
@@ -318,8 +325,9 @@ function ExecutiveConsole({
             Send
           </button>
         </div>
-        <div className="mt-3 grid grid-cols-3 gap-2">
+        <div className="mt-3 grid grid-cols-4 gap-2">
           <IconButton label="Run Flow" icon={Play} disabled={pending} onClick={() => void onCommand({ type: "run_full_flow" })} />
+          <IconButton label="Run Cycle" icon={Play} disabled={pending} onClick={() => void onCommand({ type: "run_bounded_cycle", maxRuns: 5 })} />
           {snapshot.forge.status === "paused" ? (
             <IconButton label="Resume" icon={Activity} disabled={pending} onClick={() => void onCommand({ type: "resume_forge" })} />
           ) : (

@@ -14,7 +14,11 @@ export async function middleware(request: NextRequest) {
   }
 
   if (pathname.startsWith("/api/")) {
-    return NextResponse.json({ success: false, error: "Authentication required" }, { status: 401 });
+    const response = NextResponse.json({ success: false, error: "Authentication required" }, { status: 401 });
+    response.headers.set("cache-control", "private, no-store");
+    response.headers.set("pragma", "no-cache");
+    response.headers.set("vary", "Cookie");
+    return response;
   }
 
   const loginUrl = new URL("/login", request.url);
@@ -27,7 +31,7 @@ export const config = {
 };
 
 function isPublicPath(pathname: string) {
-  return pathname === "/login" || pathname === "/api/auth/login";
+  return pathname === "/login" || pathname === "/api/auth/login" || pathname === "/api/github/oauth/callback" || pathname === "/api/github/oauth/config";
 }
 
 async function verifySession(value: string | undefined) {
@@ -54,7 +58,7 @@ async function verifySession(value: string | undefined) {
 }
 
 async function sign(value: string) {
-  const secret = process.env.FORGEOS_SESSION_SECRET ?? process.env.FORGEOS_TOKEN_SECRET;
+  const secret = process.env.FORGEOS_SESSION_SECRET;
   if (!secret) {
     return "";
   }

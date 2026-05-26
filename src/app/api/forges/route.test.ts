@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { describe, expect, it } from "vitest";
-import { POST } from "./route";
+import { DELETE, POST } from "./route";
 
 function createRequest(name: string) {
   return new NextRequest("http://localhost/api/forges", {
@@ -34,5 +34,32 @@ describe("POST /api/forges", () => {
     expect(response.status).toBe(409);
     expect(payload.success).toBe(false);
     expect(payload.error).toBe("A Forge with this slug already exists.");
+  });
+});
+
+describe("DELETE /api/forges", () => {
+  it("deletes selected Forge slugs", async () => {
+    const name = `Delete API Forge ${Date.now()}`;
+    const created = await POST(createRequest(name));
+    const createdPayload = (await created.json()) as { data?: { forge: { slug: string } } };
+    const slug = createdPayload.data!.forge.slug;
+
+    const response = await DELETE(
+      new NextRequest("http://localhost/api/forges", {
+        method: "DELETE",
+        headers: {
+          "content-type": "application/json",
+          host: "localhost",
+          origin: "http://localhost"
+        },
+        body: JSON.stringify({ slugs: [slug] })
+      })
+    );
+    const payload = (await response.json()) as { success: boolean; data?: { deletedSlugs: string[]; forges: Array<{ slug: string }> } };
+
+    expect(response.status).toBe(200);
+    expect(payload.success).toBe(true);
+    expect(payload.data?.deletedSlugs).toEqual([slug]);
+    expect(payload.data?.forges.some((forge) => forge.slug === slug)).toBe(false);
   });
 });

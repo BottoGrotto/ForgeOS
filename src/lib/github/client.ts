@@ -60,19 +60,21 @@ export async function exchangeGitHubOAuthCode(input: {
   redirectUri: string;
   codeVerifier: string;
 }) {
+  const body = new URLSearchParams({
+    client_id: input.clientId,
+    client_secret: input.clientSecret,
+    code: input.code,
+    redirect_uri: input.redirectUri,
+    code_verifier: input.codeVerifier
+  });
+
   const response = await fetch("https://github.com/login/oauth/access_token", {
     method: "POST",
     headers: {
       accept: "application/json",
-      "content-type": "application/json"
+      "content-type": "application/x-www-form-urlencoded"
     },
-    body: JSON.stringify({
-      client_id: input.clientId,
-      client_secret: input.clientSecret,
-      code: input.code,
-      redirect_uri: input.redirectUri,
-      code_verifier: input.codeVerifier
-    })
+    body
   });
   const payload = await response.json();
   if (!response.ok || payload.error) {
@@ -94,8 +96,16 @@ export async function fetchGitHubAuthenticatedUser(accessToken: string) {
 }
 
 export async function listGitHubRepositories(accessToken: string): Promise<GitHubRepositorySummary[]> {
-  const payload = await githubJson("https://api.github.com/user/repos?per_page=100&sort=updated&affiliation=owner,collaborator,organization_member", accessToken);
-  const repos = z.array(repoSchema).parse(payload);
+  const repos: z.infer<typeof repoSchema>[] = [];
+  let url: string | undefined = "https://api.github.com/user/repos?per_page=100&sort=updated&visibility=all&affiliation=owner,collaborator,organization_member";
+
+  while (url) {
+    const response = await githubResponse(url, accessToken);
+    const payload = await response.json();
+    repos.push(...z.array(repoSchema).parse(payload));
+    url = nextPageUrl(response.headers.get("link"));
+  }
+
   return repos.map((repo) => ({
     id: repo.id,
     owner: repo.owner.login,
@@ -132,13 +142,18 @@ export async function syncGitHubRepositoryFiles(accessToken: string, input: { ow
 }
 
 async function githubJson(url: string, accessToken: string) {
+  const response = await githubResponse(url, accessToken);
+  return response.json();
+}
+
+async function githubResponse(url: string, accessToken: string) {
   const response = await fetch(url, {
     headers: githubHeaders(accessToken)
   });
   if (!response.ok) {
     throw new Error("GitHub API request failed.");
   }
-  return response.json();
+  return response;
 }
 
 async function fetchGitHubRawFile(accessToken: string, owner: string, repo: string, filePath: string, ref: string) {
@@ -193,4 +208,14 @@ function extensionFor(filePath: string) {
   }
   const index = filePath.lastIndexOf(".");
   return index >= 0 ? filePath.slice(index) : "";
+}
+
+function nextPageUrl(linkHeader: string | null) {
+  if (!linkHeader) {
+    return undefined;
+  }
+
+  const next = linkHeader.split(",").find((part) => part.includes('rel="next"'));
+  const match = next?.match(/<([^>]+)>/);
+  return match?.[1];
 }

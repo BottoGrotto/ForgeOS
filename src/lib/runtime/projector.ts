@@ -1,14 +1,13 @@
 import type { ForgeSnapshot, Operation, RuntimeEventDraft, RuntimeStatus } from "./types";
-import { calculateOperationReadiness } from "./metrics";
-import { getBlockingDependencyIds } from "./scheduler";
+import { calculateSnapshotOperationReadiness } from "./scheduler";
 
 export function projectOrganizationalState(snapshot: ForgeSnapshot): ForgeSnapshot {
-  const allOperationsComplete = snapshot.operations.every((operation) => operation.status === "completed");
+  const allOperationsComplete = snapshot.operations.length > 0 && snapshot.operations.every((operation) => operation.status === "completed");
 
   const workers = snapshot.workers.map((worker) => {
     const operations = snapshot.operations.filter((operation) => operation.workerId === worker.id);
     if (operations.length === 0) {
-      return allOperationsComplete ? { ...worker, status: "completed" as const } : worker;
+      return { ...worker, status: "idle" as const, currentTask: undefined };
     }
 
     return {
@@ -58,9 +57,7 @@ export function unlockReadyOperations(snapshot: ForgeSnapshot): { snapshot: Forg
   const readyOperationIds = new Set(
     snapshot.operations
       .filter((operation) => ["planning", "blocked"].includes(operation.status))
-      .filter((operation) =>
-        calculateOperationReadiness(operation, snapshot.operations, getBlockingDependencyIds(snapshot, operation.id)).ready
-      )
+      .filter((operation) => calculateSnapshotOperationReadiness(snapshot, operation).ready)
       .map((operation) => operation.id)
   );
 

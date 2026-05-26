@@ -15,11 +15,13 @@ export async function POST(request: NextRequest, context: { params: Promise<{ fo
     return apiJson(await runtimeStore.dispatch(forgeSlug, body));
   } catch (error) {
     if (error instanceof ZodError) {
-      return apiError("Invalid runtime command", 400);
+      const detail = error.issues.map((issue) => `${issue.path.join(".") || "command"}: ${issue.message}`).join("; ");
+      return apiError(detail ? `Invalid runtime command: ${detail}` : "Invalid runtime command", 400);
     }
     if (error instanceof RuntimeCommandError) {
       return apiError(error.message, error.status);
     }
-    return apiError("Runtime command failed", 500);
+    const detail = error instanceof Error && error.message.trim() ? error.message.trim().slice(0, 240) : "";
+    return apiError(detail ? `Runtime command failed: ${detail}` : "Runtime command failed", 500);
   }
 }

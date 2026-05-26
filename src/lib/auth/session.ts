@@ -63,9 +63,9 @@ function sign(value: string) {
 }
 
 function getSessionSecret() {
-  const secret = process.env.FORGEOS_SESSION_SECRET ?? process.env.FORGEOS_TOKEN_SECRET;
+  const secret = process.env.FORGEOS_SESSION_SECRET;
   if (!secret) {
-    throw new Error("FORGEOS_SESSION_SECRET or FORGEOS_TOKEN_SECRET is required.");
+    throw new Error("FORGEOS_SESSION_SECRET is required.");
   }
   return secret;
 }

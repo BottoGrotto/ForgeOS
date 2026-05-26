@@ -27,3 +27,23 @@ export async function POST(request: NextRequest) {
     return apiError("Forge creation failed", 500);
   }
 }
+
+export async function DELETE(request: NextRequest) {
+  const originError = assertSameOrigin(request);
+  if (originError) {
+    return originError;
+  }
+
+  try {
+    const body = await request.json();
+    return apiJson(await runtimeStore.deleteForges(body));
+  } catch (error) {
+    if (error instanceof ZodError) {
+      return apiError("Invalid Forge selection", 400);
+    }
+    if (error instanceof RuntimeCommandError) {
+      return apiError(error.message, error.status);
+    }
+    return apiError("Forge deletion failed", 500);
+  }
+}

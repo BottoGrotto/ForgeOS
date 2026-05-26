@@ -37,6 +37,10 @@ export const useForgeStore = create<ForgeStore>((set, get) => ({
   commandError: null,
   hydrate: (snapshot) =>
     set((state) => {
+      if (state.snapshot?.forge.id && state.snapshot.forge.id !== snapshot.forge.id) {
+        return { snapshot, selected: { type: "forge", id: snapshot.forge.id }, commandError: null };
+      }
+
       if (state.snapshot?.forge.slug && state.snapshot.forge.slug !== snapshot.forge.slug) {
         return { snapshot, selected: { type: "forge", id: snapshot.forge.id }, commandError: null };
       }
@@ -56,7 +60,7 @@ export const useForgeStore = create<ForgeStore>((set, get) => ({
     try {
       const forgeSlug = getCurrentPageForgeSlug() ?? get().snapshot?.forge.slug;
       if (!forgeSlug) {
-        set({ commandError: "Runtime command failed.", commandPending: false });
+        set({ commandError: "Runtime command failed: no Forge is selected.", commandPending: false });
         return;
       }
 
@@ -65,14 +69,18 @@ export const useForgeStore = create<ForgeStore>((set, get) => ({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ ...command, idempotencyKey: `${command.type}-${Date.now()}` })
       });
-      const payload = (await response.json()) as { success: boolean; data?: ForgeSnapshot; error?: string };
-      if (payload.success && payload.data) {
+      const payload = (await response.json().catch(() => null)) as { success?: boolean; data?: ForgeSnapshot; error?: string } | null;
+      if (payload?.success && payload.data) {
         set({ snapshot: payload.data });
+        scheduleSnapshotRefresh(set, forgeSlug, payload.data.lastEventSequence);
+      } else if (payload?.success) {
+        scheduleSnapshotRefresh(set, forgeSlug, get().snapshot?.lastEventSequence ?? 0);
       } else {
-        set({ commandError: payload.error ?? "Runtime command failed." });
+        set({ commandError: payload?.error ?? `Runtime command failed with HTTP ${response.status}.` });
       }
-    } catch {
-      set({ commandError: "Runtime command failed." });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "unknown client error";
+      set({ commandError: `Runtime command failed: ${detail}` });
     } finally {
       set({ commandPending: false });
     }
@@ -86,7 +94,7 @@ export function selectMetrics(snapshot: ForgeSnapshot | null) {
 let eventSource: EventSource | null = null;
 let eventSourceSlug: string | null = null;
 let subscribers = 0;
-let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+const refreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 function connectRuntimeEventStream(
   set: (partial: Partial<ForgeStore> | ((state: ForgeStore) => Partial<ForgeStore>)) => void,
@@ -115,6 +123,12 @@ function connectRuntimeEventStream(
   if (!eventSource) {
     eventSourceSlug = resolvedForgeSlug;
     eventSource = new EventSource(`/api/forges/${resolvedForgeSlug}/events/stream?afterSequence=${lastSequence}`);
+    eventSource.addEventListener("open", () => {
+      scheduleSnapshotRefresh(set, resolvedForgeSlug, useForgeStore.getState().snapshot?.lastEventSequence ?? lastSequence);
+    });
+    eventSource.addEventListener("error", () => {
+      scheduleSnapshotRefresh(set, resolvedForgeSlug, useForgeStore.getState().snapshot?.lastEventSequence ?? lastSequence);
+    });
     eventSource.addEventListener("runtime.event", (message) => {
       const event = JSON.parse(message.data) as RuntimeEvent;
       scheduleSnapshotRefresh(set, resolvedForgeSlug, event.sequence);
@@ -128,9 +142,11 @@ function connectRuntimeEventStream(
       eventSource = null;
       eventSourceSlug = null;
     }
-    if (subscribers === 0 && refreshTimer) {
-      clearTimeout(refreshTimer);
-      refreshTimer = null;
+    if (subscribers === 0) {
+      for (const timer of refreshTimers.values()) {
+        clearTimeout(timer);
+      }
+      refreshTimers.clear();
     }
   };
 }
@@ -149,26 +165,39 @@ function scheduleSnapshotRefresh(
   forgeSlug: string,
   eventSequence: number
 ) {
-  if (refreshTimer) {
-    clearTimeout(refreshTimer);
+  const currentTimer = refreshTimers.get(forgeSlug);
+  if (currentTimer) {
+    clearTimeout(currentTimer);
   }
 
-  refreshTimer = setTimeout(async () => {
-    refreshTimer = null;
-    const response = await fetch(`/api/forges/${forgeSlug}/snapshot`, { cache: "no-store" });
-    const payload = (await response.json()) as { success: boolean; data?: ForgeSnapshot };
-    if (!payload.success || !payload.data) {
-      return;
-    }
+  refreshTimers.set(
+    forgeSlug,
+    setTimeout(async () => {
+      refreshTimers.delete(forgeSlug);
+      let payload: { success: boolean; data?: ForgeSnapshot; error?: string } | null = null;
+      try {
+        const response = await fetch(`/api/forges/${forgeSlug}/snapshot`, { cache: "no-store" });
+        payload = (await response.json()) as { success: boolean; data?: ForgeSnapshot; error?: string };
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : "unknown client error";
+        set({ commandError: `Snapshot refresh failed: ${detail}` });
+        return;
+      }
 
-    set((state) => {
-      if (state.snapshot && state.snapshot.lastEventSequence > payload.data!.lastEventSequence) {
-        return {};
+      if (!payload.success || !payload.data) {
+        set({ commandError: `Snapshot refresh failed: ${payload.error ?? "snapshot response was invalid."}` });
+        return;
       }
-      if (state.snapshot && state.snapshot.lastEventSequence >= eventSequence && state.snapshot.lastEventSequence >= payload.data!.lastEventSequence) {
-        return {};
-      }
-      return { snapshot: payload.data };
-    });
-  }, 150);
+
+      set((state) => {
+        if (state.snapshot && state.snapshot.lastEventSequence > payload.data!.lastEventSequence) {
+          return {};
+        }
+        if (state.snapshot && state.snapshot.lastEventSequence >= eventSequence && state.snapshot.lastEventSequence >= payload.data!.lastEventSequence) {
+          return {};
+        }
+        return { snapshot: payload.data, commandError: null };
+      });
+    }, 150)
+  );
 }

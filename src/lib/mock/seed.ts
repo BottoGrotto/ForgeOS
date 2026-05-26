@@ -19,31 +19,93 @@ export function createDemoSnapshot(): ForgeSnapshot {
   });
 }
 
+export function createEmptyForgeSnapshot(input: CreateForgeSnapshotInput): ForgeSnapshot {
+  const timestamp = new Date().toISOString();
+  const organization = createForgeSnapshot(input);
+  const divisions = organization.divisions.map((division) => ({
+    ...division,
+    status: "idle" as const,
+    progress: 0
+  }));
+  const workers = organization.workers.map((item) => ({
+    ...item,
+    status: "idle" as const,
+    currentTask: "Waiting for operation assignment",
+    contextManifest: defaultWorkerContextManifest(item.id, item.name, item.role, "Waiting for operation assignment", {
+      virtualFileRefs: [],
+      artifactRefs: [],
+      recentEventSummary: ["Fresh Forge initialized."]
+    })
+  }));
+
+  return {
+    forge: {
+      id: input.id,
+      slug: input.slug,
+      name: input.name,
+      tagline: input.tagline ?? "Fresh Forge workspace.",
+      activePhase: "Planning",
+      status: "active"
+    },
+    lastEventSequence: 1,
+    schemaVersion: 5,
+    divisions,
+    workers,
+    operations: [],
+    runs: [],
+    dependencies: [],
+    artifacts: [],
+    files: [],
+    handoffs: [],
+    messages: [],
+    proposals: [],
+    executiveLoops: [],
+    executiveCycles: [],
+    executivePlans: [],
+    executiveReports: [],
+    events: [
+      {
+        id: `${input.slug}-event-1`,
+        forgeId: input.id,
+        sequence: 1,
+        type: "forge.initialized",
+        actorType: "runtime",
+        targetType: "forge",
+        targetId: input.id,
+        message: "Empty Forge workspace initialized.",
+        severity: "success",
+        payload: { template: "empty" },
+        createdAt: timestamp
+      }
+    ]
+  };
+}
+
 export function createForgeSnapshot(input: CreateForgeSnapshotInput): ForgeSnapshot {
   const tagline = input.tagline ?? "An operating system for autonomous AI organizations.";
   const idFor = input.prefixEntityIds ? (id: string) => `${input.slug}-${id}` : (id: string) => id;
 
   const divisions = [
-    { id: idFor("strategy"), name: "Strategy Division", objective: "Shape the project direction and hackathon strategy.", status: "completed", progress: 100, order: 1 },
-    { id: idFor("operations"), name: "Operations Division", objective: "Coordinate handoffs, blockers, and organizational alignment.", status: "running", progress: 72, order: 2 },
-    { id: idFor("engineering"), name: "Engineering Division", objective: "Build the product through dependency-aware operations.", status: "running", progress: 61, order: 3 },
-    { id: idFor("presentation"), name: "Presentation Division", objective: "Create pitch narrative, demo flow, and judge positioning.", status: "reviewing", progress: 54, order: 4 },
-    { id: idFor("qa"), name: "QA Division", objective: "Review implementation, pitch, and organizational consistency.", status: "planning", progress: 22, order: 5 },
-    { id: idFor("release"), name: "Release Division", objective: "Finalize launch readiness, documentation, and demo path.", status: "idle", progress: 8, order: 6 }
+    { id: idFor("strategy"), name: "Strategy Division", objective: "Shape the project direction and hackathon strategy.", status: "completed", progress: 100, order: 1, leadWorkerId: idFor("strategy-director") },
+    { id: idFor("operations"), name: "Operations Division", objective: "Coordinate handoffs, blockers, and organizational alignment.", status: "running", progress: 72, order: 2, leadWorkerId: idFor("ops-coordinator") },
+    { id: idFor("engineering"), name: "Engineering Division", objective: "Build the product through dependency-aware operations.", status: "running", progress: 61, order: 3, leadWorkerId: idFor("eng-director") },
+    { id: idFor("presentation"), name: "Presentation Division", objective: "Create pitch narrative, demo flow, and judge positioning.", status: "reviewing", progress: 54, order: 4, leadWorkerId: idFor("story-strategist") },
+    { id: idFor("qa"), name: "QA Division", objective: "Review implementation, pitch, and organizational consistency.", status: "planning", progress: 22, order: 5, leadWorkerId: idFor("qa-runner-alpha") },
+    { id: idFor("release"), name: "Release Division", objective: "Finalize launch readiness, documentation, and demo path.", status: "idle", progress: 8, order: 6, leadWorkerId: idFor("release-director") }
   ] as ForgeSnapshot["divisions"];
 
   const workers = [
-    worker(idFor("executive-ai"), idFor("operations"), "Executive AI", "Runtime coordinator", "running", "Coordinating Forge status"),
-    worker(idFor("strategy-director"), idFor("strategy"), "Strategy Director", "Project strategy owner", "completed", "Finalized Forge plan"),
-    worker(idFor("research-analyst"), idFor("strategy"), "Research Analyst", "Competitive and sponsor research", "completed", "Delivered market scan"),
-    worker(idFor("ops-coordinator"), idFor("operations"), "Engineering Coordinator", "Cross-division operations router", "running", "Routing engineering handoff"),
-    worker(idFor("eng-director"), idFor("engineering"), "Engineering Director", "Technical execution owner", "running", "Sequencing implementation graph"),
-    worker(idFor("frontend-worker"), idFor("engineering"), "Frontend Worker", "Command center UI specialist", "running", "Building dashboard shell"),
-    worker(idFor("backend-worker"), idFor("engineering"), "Backend Worker", "Runtime and API specialist", "ready", "Waiting for schema lock"),
-    worker(idFor("testing-worker"), idFor("engineering"), "Testing Worker", "Verification specialist", "blocked", "Waiting for UI contracts"),
-    worker(idFor("story-strategist"), idFor("presentation"), "Story Strategist", "Pitch narrative owner", "reviewing", "Reviewing judge story"),
-    worker(idFor("qa-runner-alpha"), idFor("qa"), "QA Runner Alpha", "Autonomous review runner", "planning", "Preparing validation plan"),
-    worker(idFor("release-director"), idFor("release"), "Release Director", "Submission readiness owner", "idle", "Waiting for QA pass")
+    worker(idFor("executive-ai"), idFor("operations"), "Executive AI", "Runtime coordinator", "running", "Coordinating Forge status", "executive"),
+    worker(idFor("strategy-director"), idFor("strategy"), "Strategy Director", "Project strategy owner", "completed", "Finalized Forge plan", "lead", idFor("executive-ai")),
+    worker(idFor("research-analyst"), idFor("strategy"), "Research Analyst", "Competitive and sponsor research", "completed", "Delivered market scan", "worker", idFor("strategy-director")),
+    worker(idFor("ops-coordinator"), idFor("operations"), "Engineering Coordinator", "Cross-division operations router", "running", "Routing engineering handoff", "lead", idFor("executive-ai")),
+    worker(idFor("eng-director"), idFor("engineering"), "Engineering Director", "Technical execution owner", "running", "Sequencing implementation graph", "lead", idFor("executive-ai")),
+    worker(idFor("frontend-worker"), idFor("engineering"), "Frontend Worker", "Command center UI specialist", "running", "Building dashboard shell", "worker", idFor("eng-director")),
+    worker(idFor("backend-worker"), idFor("engineering"), "Backend Worker", "Runtime and API specialist", "ready", "Waiting for schema lock", "worker", idFor("eng-director")),
+    worker(idFor("testing-worker"), idFor("engineering"), "Testing Worker", "Verification specialist", "blocked", "Waiting for UI contracts", "worker", idFor("eng-director")),
+    worker(idFor("story-strategist"), idFor("presentation"), "Story Strategist", "Pitch narrative owner", "reviewing", "Reviewing judge story", "lead", idFor("executive-ai")),
+    worker(idFor("qa-runner-alpha"), idFor("qa"), "QA Runner Alpha", "Autonomous review runner", "planning", "Preparing validation plan", "lead", idFor("executive-ai")),
+    worker(idFor("release-director"), idFor("release"), "Release Director", "Submission readiness owner", "idle", "Waiting for QA pass", "lead", idFor("executive-ai"))
   ] as ForgeSnapshot["workers"];
 
   const operations = [
@@ -91,6 +153,9 @@ export function createForgeSnapshot(input: CreateForgeSnapshotInput): ForgeSnaps
       deliverables: ["Project plan", "Competitive positioning", "Scope constraints"],
       blockers: [],
       requiredContext: ["Build dashboard first", "Keep mock-to-real adapters strict"],
+      artifactIds: [idFor("artifact-strategy")],
+      fileIds: [idFor("file-plan")],
+      status: "open" as const,
       confidence: 92,
       createdAt: now
     },
@@ -102,15 +167,18 @@ export function createForgeSnapshot(input: CreateForgeSnapshotInput): ForgeSnaps
       deliverables: ["Operation graph", "Runtime boundaries", "UI panel priorities"],
       blockers: ["Testing waits for runtime event contract"],
       requiredContext: ["Virtual files only", "No raw provider internals"],
+      artifactIds: [idFor("artifact-runtime")],
+      fileIds: [idFor("file-runtime")],
+      status: "open" as const,
       confidence: 84,
       createdAt: now
     }
   ];
 
   const messages = [
-    { id: idFor("msg-1"), role: "executive", content: "Forge initialized. Strategy is complete, engineering is active, and QA is preparing the release review.", createdAt: now },
-    { id: idFor("msg-2"), role: "operator", content: "Surface the current blockers.", createdAt: now },
-    { id: idFor("msg-3"), role: "executive", content: "Primary blocker: testing worker is waiting for runtime contracts. Recommendation: lock RuntimeEvent and ForgeSnapshot before broad UI expansion.", createdAt: now }
+    { id: idFor("msg-1"), role: "executive", kind: "executive_reply", source: "manual", content: "Forge initialized. Strategy is complete, engineering is active, and QA is preparing the release review.", createdAt: now },
+    { id: idFor("msg-2"), role: "operator", kind: "operator_prompt", source: "manual", content: "Surface the current blockers.", createdAt: now },
+    { id: idFor("msg-3"), role: "executive", kind: "executive_reply", source: "manual", content: "Primary blocker: testing worker is waiting for runtime contracts. Recommendation: lock RuntimeEvent and ForgeSnapshot before broad UI expansion.", createdAt: now }
   ] as ForgeSnapshot["messages"];
 
   const events = [
@@ -135,33 +203,183 @@ export function createForgeSnapshot(input: CreateForgeSnapshotInput): ForgeSnaps
     divisions,
     workers,
     operations,
+    runs: [],
     dependencies,
     artifacts,
     files,
     handoffs,
     messages,
+    proposals: [],
+    executiveLoops: [],
+    executiveCycles: [],
+    executivePlans: [],
+    executiveReports: [],
     events
   };
 }
 
-function worker(id: string, divisionId: string, name: string, role: string, status: ForgeSnapshot["workers"][number]["status"], currentTask: string) {
+function worker(id: string, divisionId: string, name: string, role: string, status: ForgeSnapshot["workers"][number]["status"], currentTask: string, kind: ForgeSnapshot["workers"][number]["kind"], managerWorkerId?: string) {
   return {
     id,
     divisionId,
     name,
     role,
+    kind,
+    managerWorkerId,
     status,
     currentTask,
-    contextManifest: {
-      objective: currentTask,
-      instructionSources: ["ForgeOS role charter", "Current operation brief"],
-      virtualFileRefs: ["docs/project-plan.md"],
-      artifactRefs: ["artifact-strategy"],
-      memorySnippets: ["Prioritize hierarchy, handoffs, and operational visibility."],
-      recentEventSummary: ["Received latest runtime event projection."],
-      redactions: ["Provider raw prompts and hidden instructions are not displayed."]
-    }
+    contextManifest: defaultWorkerContextManifest(id, name, role, currentTask)
   };
+}
+
+export function defaultWorkerContextManifest(
+  id: string,
+  name: string,
+  role: string,
+  currentTask: string,
+  overrides: Partial<ForgeSnapshot["workers"][number]["contextManifest"]> = {}
+) {
+  const profile = defaultWorkerExpertiseProfile(id, name, role);
+
+  return {
+    objective: profile.objective,
+    instructionSources: overrides.instructionSources ?? ["ForgeOS role charter", "Current operation brief", ...profile.instructionSources],
+    virtualFileRefs: overrides.virtualFileRefs ?? ["docs/project-plan.md"],
+    artifactRefs: overrides.artifactRefs ?? ["artifact-strategy"],
+    memorySnippets: overrides.memorySnippets ?? profile.memorySnippets,
+    recentEventSummary: overrides.recentEventSummary ?? [`Current assignment: ${currentTask}`, ...profile.recentEventSummary],
+    redactions: overrides.redactions ?? ["Provider raw prompts and hidden instructions are not displayed."]
+  };
+}
+
+function defaultWorkerExpertiseProfile(id: string, name: string, role: string) {
+  const key = `${id} ${name} ${role}`.toLowerCase();
+  if (matchesDefaultWorker(key, "executive-ai", "executive ai")) {
+    return {
+      objective: "Coordinate the Forge, convert operator intent into operations, manage staffing, track blockers, and keep the team loop moving.",
+      instructionSources: ["Executive operating charter", "Operator conversation history"],
+      memorySnippets: ["Prefer clear operation decomposition, explicit ownership, and bounded parallel execution."],
+      recentEventSummary: ["Responsible for orchestration, plan adjustment, and run-slot coordination."]
+    };
+  }
+  if (matchesDefaultWorker(key, "strategy-director")) {
+    return {
+      objective: "Own project strategy, scope control, user value, sequencing, and success criteria for the Forge.",
+      instructionSources: ["Strategy division charter", "Operator project brief"],
+      memorySnippets: ["Translate broad requests into crisp milestones, risks, assumptions, and acceptance criteria."],
+      recentEventSummary: ["Responsible for plan quality, prioritization, and strategic tradeoffs."]
+    };
+  }
+  if (matchesDefaultWorker(key, "research-analyst")) {
+    return {
+      objective: "Research external sources, user needs, market context, data availability, and constraints that shape implementation.",
+      instructionSources: ["Research analyst charter", "Source-verification guidelines"],
+      memorySnippets: ["Prefer cited, source-aware findings and call out stale or uncertain data."],
+      recentEventSummary: ["Responsible for evidence gathering and source constraints."]
+    };
+  }
+  if (matchesDefaultWorker(key, "ops-coordinator")) {
+    return {
+      objective: "Route work across divisions, create handoffs, detect dependency gaps, and keep operations unblocked.",
+      instructionSources: ["Operations routing charter", "Dependency graph policy"],
+      memorySnippets: ["Every handoff should name deliverables, downstream owner, blockers, and required context."],
+      recentEventSummary: ["Responsible for operational continuity and cross-team synchronization."]
+    };
+  }
+  if (matchesDefaultWorker(key, "eng-director")) {
+    return {
+      objective: "Lead technical execution, architecture choices, implementation sequencing, and engineering quality standards.",
+      instructionSources: ["Engineering director charter", "Runtime implementation constraints"],
+      memorySnippets: ["Decompose implementation into source files, interfaces, tests, and integration checkpoints."],
+      recentEventSummary: ["Responsible for technical direction and implementation readiness."]
+    };
+  }
+  if (matchesDefaultWorker(key, "frontend-worker")) {
+    return {
+      objective: "Build mobile-first, accessible, responsive UI with clear information architecture and polished interaction states.",
+      instructionSources: ["Frontend worker charter", "ForgeOS frontend design rules"],
+      memorySnippets: ["Produce concrete UI files, component structure, responsive states, and user-flow details."],
+      recentEventSummary: ["Responsible for interface implementation and user-facing polish."]
+    };
+  }
+  if (matchesDefaultWorker(key, "backend-worker")) {
+    return {
+      objective: "Build APIs, data flows, runtime contracts, provider integrations, persistence, and server-side validation.",
+      instructionSources: ["Backend worker charter", "Runtime API contract"],
+      memorySnippets: ["Prefer typed contracts, schema validation, sanitized provider boundaries, and durable persistence behavior."],
+      recentEventSummary: ["Responsible for backend implementation and data/runtime correctness."]
+    };
+  }
+  if (matchesDefaultWorker(key, "testing-worker")) {
+    return {
+      objective: "Design and execute verification for unit, integration, E2E, accessibility, regression, and runtime behavior.",
+      instructionSources: ["Testing worker charter", "Verification policy"],
+      memorySnippets: ["Turn requirements into test cases and include failure modes, fixtures, and acceptance checks."],
+      recentEventSummary: ["Responsible for validation coverage and release confidence."]
+    };
+  }
+  if (matchesDefaultWorker(key, "story-strategist")) {
+    return {
+      objective: "Craft demo narrative, product positioning, user story, pitch structure, and stakeholder-facing explanations.",
+      instructionSources: ["Presentation division charter", "Demo narrative brief"],
+      memorySnippets: ["Keep messaging concrete, outcome-oriented, and grounded in what the Forge actually built."],
+      recentEventSummary: ["Responsible for narrative clarity and demo communication."]
+    };
+  }
+  if (matchesDefaultWorker(key, "qa-runner")) {
+    return {
+      objective: "Review output quality, correctness, usability, data accuracy, security risks, and release readiness.",
+      instructionSources: ["QA runner charter", "Release quality checklist"],
+      memorySnippets: ["Report concrete defects, severity, reproduction notes, and release-blocking risks."],
+      recentEventSummary: ["Responsible for independent quality review."]
+    };
+  }
+  if (matchesDefaultWorker(key, "release-director")) {
+    return {
+      objective: "Prepare final release pass, documentation, deployment checklist, handoff notes, and launch readiness.",
+      instructionSources: ["Release director charter", "Submission readiness checklist"],
+      memorySnippets: ["Verify the demo path, artifacts, docs, known risks, and operator-visible release status."],
+      recentEventSummary: ["Responsible for final packaging and release confidence."]
+    };
+  }
+
+  return {
+    objective: `Specialize in ${role}.`,
+    instructionSources: ["ForgeOS role charter"],
+    memorySnippets: [`Apply ${role} expertise to the assigned operation.`],
+    recentEventSummary: ["Ready to receive a specialized operation assignment."]
+  };
+}
+
+export function isDefaultForgeWorker(id: string, name: string, role: string) {
+  const idKey = id.toLowerCase();
+  const nameKey = name.toLowerCase();
+  const roleKey = role.toLowerCase();
+  const defaultIds = [
+    "executive-ai",
+    "strategy-director",
+    "research-analyst",
+    "ops-coordinator",
+    "eng-director",
+    "frontend-worker",
+    "backend-worker",
+    "testing-worker",
+    "story-strategist",
+    "qa-runner",
+    "release-director"
+  ];
+
+  return (
+    defaultIds.some((marker) => idKey === marker || idKey.endsWith(`-${marker}`)) ||
+    (nameKey === "executive ai" && roleKey === "runtime coordinator") ||
+    (nameKey === "frontend worker" && roleKey === "command center ui specialist") ||
+    (nameKey === "backend worker" && roleKey === "runtime and api specialist") ||
+    (nameKey === "testing worker" && roleKey === "verification specialist")
+  );
+}
+
+function matchesDefaultWorker(key: string, ...markers: string[]) {
+  return markers.some((marker) => new RegExp(`(?:^|-)${marker}(?:$|\\s|-)`).test(key) || key.includes(marker.replace(/-/g, " ")));
 }
 
 function op(
@@ -175,7 +393,7 @@ function op(
   outputArtifactIds: string[],
   blockedReason?: string
 ) {
-  return { id, divisionId, workerId, title, description, status, priority: "high", progress, blockedReason, retryCount: 0, outputArtifactIds };
+  return { id, divisionId, workerId, title, description, status, priority: "high", progress, blockedReason, retryCount: 0, outputArtifactIds, routingStage: status === "completed" ? "done" : "worker_ready", webAccessPolicy: "none" };
 }
 
 function dep(id: string, operationId: string, dependsOnOperationId: string, type: ForgeSnapshot["dependencies"][number]["type"] = "blocks") {

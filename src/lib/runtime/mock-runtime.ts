@@ -1,13 +1,18 @@
 import type { AgentRuntime, ProviderCapabilities, RunOperationInput, RuntimeEventDraft } from "./types";
 
 export class MockRuntime implements AgentRuntime {
+  provider() {
+    return "mock" as const;
+  }
+
   capabilities(): ProviderCapabilities {
     return {
       streamsEvents: true,
       supportsCancel: true,
       supportsResume: false,
       supportsRetries: true,
-      supportsWorkspaceRefs: true
+      supportsWorkspaceRefs: true,
+      supportsWebSearch: false
     };
   }
 
@@ -20,7 +25,7 @@ export class MockRuntime implements AgentRuntime {
       targetId: input.operationId,
       message: "Mock runtime started operation execution.",
       severity: "info",
-      payload: { ...input }
+      payload: { forgeId: input.forgeId, operationId: input.operationId }
     };
 
     yield {
@@ -31,7 +36,7 @@ export class MockRuntime implements AgentRuntime {
       targetId: input.operationId,
       message: "Mock runtime completed operation execution.",
       severity: "success",
-      payload: { ...input }
+      payload: { forgeId: input.forgeId, operationId: input.operationId }
     };
   }
 

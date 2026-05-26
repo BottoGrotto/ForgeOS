@@ -19,16 +19,17 @@ describe("/api/dev/runtime-store", () => {
 
     expect(response.status).toBe(200);
     expect(payload.success).toBe(true);
-    expect(payload.data?.storage).toMatchObject({ mode: "memory", resettable: false, visible: true });
+    expect(payload.data?.storage).toMatchObject({ mode: "memory", resettable: true, visible: true });
   });
 
-  it("rejects local clearing when the active runtime is not file backed", async () => {
+  it("clears resettable development storage", async () => {
     const response = await DELETE(deleteRequest());
-    const payload = (await response.json()) as { success: boolean; error?: string };
+    const payload = (await response.json()) as { success: boolean; data?: { forges: unknown[]; storage: { resettable: boolean } } };
 
-    expect(response.status).toBe(403);
-    expect(payload.success).toBe(false);
-    expect(payload.error).toBe("Local Forge storage reset is available only with file-backed development storage.");
+    expect(response.status).toBe(200);
+    expect(payload.success).toBe(true);
+    expect(payload.data?.storage.resettable).toBe(true);
+    expect(payload.data?.forges).toEqual([]);
   });
 
   it("rejects cross-origin clear requests", async () => {
